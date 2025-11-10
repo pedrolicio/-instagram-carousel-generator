@@ -1,22 +1,4 @@
-const requiredPaths = [
-  'clientName',
-  'brandIdentity.colors.primary',
-  'brandIdentity.colors.secondary',
-  'brandIdentity.colors.accent',
-  'brandIdentity.colors.background',
-  'brandIdentity.colors.text',
-  'brandIdentity.visualStyle.type',
-  'brandIdentity.visualStyle.mood',
-  'brandIdentity.visualStyle.imageStyle',
-  'brandIdentity.visualStyle.composition',
-  'brandIdentity.typography.style',
-  'brandIdentity.typography.hierarchy',
-  'brandIdentity.visualElements.preferredLayout',
-  'communication.tone',
-  'communication.language',
-  'communication.formality',
-  'communication.targetAudience.profile'
-];
+const requiredPaths = ['clientName', 'communication.tone', 'communication.language'];
 
 const resolvePath = (object, path) =>
   path.split('.').reduce((value, key) => (value && value[key] !== undefined ? value[key] : undefined), object);
@@ -31,12 +13,11 @@ export const validateBrandKit = (brandKit) => {
     }
   });
 
-  if (brandKit?.communication?.characteristics?.length === 0) {
-    errors['communication.characteristics'] = 'Informe pelo menos uma característica';
-  }
-
-  if (brandKit?.communication?.contentThemes?.length === 0) {
-    errors['communication.contentThemes'] = 'Informe pelo menos um tema de conteúdo';
+  if (brandKit?.communication?.tone === 'custom') {
+    const customTone = brandKit?.communication?.customTone;
+    if (!customTone || customTone.trim() === '') {
+      errors['communication.customTone'] = 'Descreva o tom personalizado';
+    }
   }
 
   return {

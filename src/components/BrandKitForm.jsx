@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
-import { Palette, Sparkles, XCircle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { FileText, Images, Sparkles, UserCircle2, XCircle } from 'lucide-react';
 import { validateBrandKit } from '../utils/brandKitValidator.js';
+import { languageOptions, toneOptions } from '../utils/brandKitOptions.js';
 
 const Section = ({ icon: Icon, title, description, children }) => (
   <section className="rounded-2xl border border-primary/10 bg-surface p-6 shadow-sm">
@@ -17,7 +18,8 @@ const Section = ({ icon: Icon, title, description, children }) => (
   </section>
 );
 
-const inputBase = 'w-full rounded-xl border border-primary/20 bg-background px-4 py-3 text-sm text-text outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20';
+const inputBase =
+  'w-full rounded-xl border border-primary/20 bg-background px-4 py-3 text-sm text-text outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20';
 
 const parseList = (value) =>
   value
@@ -27,12 +29,133 @@ const parseList = (value) =>
 
 const stringifyList = (list = []) => list.join('\n');
 
+const generateId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return Math.random().toString(36).slice(2, 10);
+};
+
+const ensureArray = (value) => (Array.isArray(value) ? value : []);
+
+const normalizeAttachments = (attachments = []) =>
+  ensureArray(attachments).map((item) => ({
+    ...item,
+    id: item?.id ?? generateId()
+  }));
+
+const normalizeBrandKit = (brandKit = {}) => {
+  const defaults = {
+    id: brandKit?.id,
+    clientName: brandKit?.clientName ?? '',
+    brandIdentity: {
+      colors: {},
+      visualStyle: {},
+      typography: {},
+      visualElements: {},
+      brandManuals: [],
+      visualReferences: {
+        uploads: [],
+        links: [],
+        notes: ''
+      }
+    },
+    communication: {
+      tone: toneOptions[0].value,
+      customTone: '',
+      language: languageOptions[0].value,
+      briefingFiles: [],
+      briefingNotes: '',
+      additionalNotes: ''
+    },
+    examples: {
+      referenceUrls: [],
+      successfulExamples: ''
+    }
+  };
+
+  const visualReferences = brandKit?.brandIdentity?.visualReferences ?? {};
+  const communication = brandKit?.communication ?? {};
+
+  return {
+    ...defaults,
+    ...brandKit,
+    brandIdentity: {
+      ...defaults.brandIdentity,
+      ...brandKit?.brandIdentity,
+      brandManuals: normalizeAttachments(brandKit?.brandIdentity?.brandManuals ?? []),
+      visualReferences: {
+        ...defaults.brandIdentity.visualReferences,
+        ...visualReferences,
+        uploads: normalizeAttachments(visualReferences?.uploads ?? []),
+        links: ensureArray(visualReferences?.links ?? [])
+      }
+    },
+    communication: {
+      ...defaults.communication,
+      ...communication,
+      tone: communication?.tone ?? defaults.communication.tone,
+      customTone: communication?.customTone ?? '',
+      language: communication?.language ?? defaults.communication.language,
+      briefingFiles: normalizeAttachments(communication?.briefingFiles ?? []),
+      briefingNotes: communication?.briefingNotes ?? communication?.notes ?? '',
+      additionalNotes: communication?.additionalNotes ?? ''
+    },
+    examples: {
+      ...defaults.examples,
+      ...brandKit?.examples
+    }
+  };
+};
+
+const formatFileSize = (size = 0) => {
+  if (!size) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const exponent = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
+  const value = size / 1024 ** exponent;
+  return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
+};
+
+const AttachmentList = ({ items = [], onRemove }) => {
+  if (!items.length) {
+    return null;
+  }
+
+  return (
+    <ul className="flex flex-col gap-2">
+      {items.map((file) => (
+        <li
+          key={file.id}
+          className="flex items-center justify-between rounded-xl border border-primary/10 bg-surface px-4 py-3 text-sm text-text"
+        >
+          <div className="flex flex-col">
+            <span className="font-medium">{file.name}</span>
+            {file.size ? <span className="text-xs text-text/60">{formatFileSize(file.size)}</span> : null}
+          </div>
+          <button
+            type="button"
+            onClick={() => onRemove?.(file.id)}
+            className="inline-flex items-center gap-2 rounded-full border border-transparent px-2 py-1 text-xs font-semibold text-error transition hover:border-error/30 hover:text-error"
+          >
+            <XCircle className="h-4 w-4" />
+            Remover
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+};
+
 export const BrandKitForm = ({ initialData, onSubmit, onCancel }) => {
   const clone = typeof structuredClone === 'function' ? structuredClone : (value) => JSON.parse(JSON.stringify(value));
-  const [formData, setFormData] = useState(initialData);
+  const [formData, setFormData] = useState(() => normalizeBrandKit(initialData));
   const [errors, setErrors] = useState({});
 
-  const colorPreview = useMemo(() => Object.values(formData.brandIdentity.colors ?? {}), [formData.brandIdentity.colors]);
+  useEffect(() => {
+    setFormData(normalizeBrandKit(initialData));
+    setErrors({});
+  }, [initialData]);
 
   const handleChange = (path, value) => {
     setFormData((prev) => {
@@ -50,6 +173,67 @@ export const BrandKitForm = ({ initialData, onSubmit, onCancel }) => {
 
   const handleListChange = (path, value) => handleChange(path, parseList(value));
 
+  const handleToneChange = (value) => {
+    handleChange('communication.tone', value);
+    if (value !== 'custom') {
+      handleChange('communication.customTone', '');
+    }
+  };
+
+  const handleFileUpload = async (path, filesList) => {
+    const files = Array.from(filesList ?? []);
+    if (!files.length) return;
+
+    const attachments = await Promise.all(
+      files.map(
+        (file) =>
+          new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () =>
+              resolve({
+                id: generateId(),
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                content: reader.result
+              });
+            reader.onerror = () => reject(reader.error ?? new Error('Não foi possível ler o arquivo.'));
+            reader.readAsDataURL(file);
+          })
+      )
+    );
+
+    setFormData((prev) => {
+      const next = clone(prev);
+      const segments = path.split('.');
+      let cursor = next;
+      segments.slice(0, -1).forEach((segment) => {
+        cursor[segment] = cursor[segment] ?? {};
+        cursor = cursor[segment];
+      });
+      const key = segments.at(-1);
+      const current = Array.isArray(cursor[key]) ? cursor[key] : [];
+      cursor[key] = [...current, ...attachments];
+      return next;
+    });
+  };
+
+  const handleFileRemove = (path, fileId) => {
+    setFormData((prev) => {
+      const next = clone(prev);
+      const segments = path.split('.');
+      let cursor = next;
+      segments.slice(0, -1).forEach((segment) => {
+        cursor[segment] = cursor[segment] ?? {};
+        cursor = cursor[segment];
+      });
+      const key = segments.at(-1);
+      const current = Array.isArray(cursor[key]) ? cursor[key] : [];
+      cursor[key] = current.filter((file) => file.id !== fileId);
+      return next;
+    });
+  };
+
   const handleSubmit = (event) => {
     event.preventDefault();
     const validation = validateBrandKit(formData);
@@ -59,232 +243,186 @@ export const BrandKitForm = ({ initialData, onSubmit, onCancel }) => {
       return;
     }
 
+    setErrors({});
     onSubmit?.(formData);
   };
 
+  const toneIsCustom = formData.communication.tone === 'custom';
+
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-      <Section icon={Palette} title="Identidade Visual" description="Defina a base visual que garante consistência entre os slides.">
-        <div className="grid gap-4 md:grid-cols-2">
-          {Object.entries(formData.brandIdentity.colors).map(([key, value]) => (
-            <div key={key} className="flex flex-col gap-2">
-              <label className="text-sm font-medium text-text/80">Cor {key}</label>
-              <div className="flex items-center gap-3">
-                <input
-                  type="color"
-                  value={value}
-                  onChange={(event) => handleChange(`brandIdentity.colors.${key}`, event.target.value)}
-                  className="h-12 w-16 cursor-pointer rounded-xl border border-primary/20 bg-surface"
-                />
-                <input
-                  type="text"
-                  value={value}
-                  onChange={(event) => handleChange(`brandIdentity.colors.${key}`, event.target.value)}
-                  className={inputBase}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          {colorPreview.map((color) => (
-            <span key={color} className="flex h-10 w-10 items-center justify-center rounded-full border border-primary/10" style={{ backgroundColor: color }} />
-          ))}
-        </div>
-
+      <Section icon={UserCircle2} title="Informações do cliente" description="Defina quem é o dono do brand kit.">
         <div className="grid gap-4 md:grid-cols-2">
           <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Estilo Visual</label>
+            <label className="text-sm font-medium text-text/80">Nome do cliente</label>
             <input
               type="text"
-              value={formData.brandIdentity.visualStyle.type}
-              onChange={(event) => handleChange('brandIdentity.visualStyle.type', event.target.value)}
+              value={formData.clientName}
+              onChange={(event) => handleChange('clientName', event.target.value)}
               className={inputBase}
-              placeholder="Ex: moderno-minimalista"
+              placeholder="Ex: Loja Exemplo"
             />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Mood</label>
-            <input
-              type="text"
-              value={formData.brandIdentity.visualStyle.mood}
-              onChange={(event) => handleChange('brandIdentity.visualStyle.mood', event.target.value)}
-              className={inputBase}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Estilo de Imagem</label>
-            <input
-              type="text"
-              value={formData.brandIdentity.visualStyle.imageStyle}
-              onChange={(event) => handleChange('brandIdentity.visualStyle.imageStyle', event.target.value)}
-              className={inputBase}
-              placeholder="Ex: fotografia clean"
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Composição</label>
-            <input
-              type="text"
-              value={formData.brandIdentity.visualStyle.composition}
-              onChange={(event) => handleChange('brandIdentity.visualStyle.composition', event.target.value)}
-              className={inputBase}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Tipografia</label>
-            <input
-              type="text"
-              value={formData.brandIdentity.typography.style}
-              onChange={(event) => handleChange('brandIdentity.typography.style', event.target.value)}
-              className={inputBase}
-              placeholder="Ex: sans-serif moderna"
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Hierarquia Tipográfica</label>
-            <input
-              type="text"
-              value={formData.brandIdentity.typography.hierarchy}
-              onChange={(event) => handleChange('brandIdentity.typography.hierarchy', event.target.value)}
-              className={inputBase}
-            />
+            {errors.clientName && <p className="text-xs font-medium text-error">{errors.clientName}</p>}
           </div>
         </div>
+      </Section>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          {Object.entries(formData.brandIdentity.visualElements)
-            .filter(([key]) => key.startsWith('use'))
-            .map(([key, value]) => (
-              <label key={key} className="flex items-center gap-3 rounded-xl border border-primary/10 bg-background px-4 py-3 text-sm font-medium text-text/80">
-                <input
-                  type="checkbox"
-                  checked={value}
-                  onChange={(event) => handleChange(`brandIdentity.visualElements.${key}`, event.target.checked)}
-                  className="h-4 w-4 rounded border-primary/40 text-primary focus:ring-primary"
-                />
-                {key.replace('use', '')}
-              </label>
-            ))}
+      <Section
+        icon={FileText}
+        title="Materiais da marca"
+        description="Envie o manual de identidade e o briefing oficial para centralizar as diretrizes."
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-text/80">Manual da marca</label>
+            <input
+              type="file"
+              accept=".pdf,.ppt,.pptx,.doc,.docx,.jpg,.jpeg,.png,.webp"
+              multiple
+              onChange={async (event) => {
+                await handleFileUpload('brandIdentity.brandManuals', event.target.files);
+                event.target.value = '';
+              }}
+              className={`${inputBase} file:mr-4 file:rounded-lg file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white`}
+            />
+            <AttachmentList
+              items={formData.brandIdentity.brandManuals}
+              onRemove={(fileId) => handleFileRemove('brandIdentity.brandManuals', fileId)}
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-text/80">Briefing ou guia da marca</label>
+            <input
+              type="file"
+              accept=".pdf,.ppt,.pptx,.doc,.docx,.txt"
+              multiple
+              onChange={async (event) => {
+                await handleFileUpload('communication.briefingFiles', event.target.files);
+                event.target.value = '';
+              }}
+              className={`${inputBase} file:mr-4 file:rounded-lg file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white`}
+            />
+            <AttachmentList
+              items={formData.communication.briefingFiles}
+              onRemove={(fileId) => handleFileRemove('communication.briefingFiles', fileId)}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-text/80">Layout Preferido</label>
-          <input
-            type="text"
-            value={formData.brandIdentity.visualElements.preferredLayout}
-            onChange={(event) => handleChange('brandIdentity.visualElements.preferredLayout', event.target.value)}
-            className={inputBase}
-            placeholder="Ex: texto na parte inferior com imagem no topo"
+          <label className="text-sm font-medium text-text/80">Notas importantes do briefing</label>
+          <textarea
+            value={formData.communication.briefingNotes}
+            onChange={(event) => handleChange('communication.briefingNotes', event.target.value)}
+            className={`${inputBase} min-h-[120px]`}
+            placeholder="Resuma os pontos críticos do briefing para facilitar o uso nas gerações."
           />
         </div>
       </Section>
 
-      <Section icon={Sparkles} title="Comunicação" description="Defina tom de voz, público-alvo e direcionadores de conteúdo.">
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Tom de voz</label>
-            <input
-              type="text"
-              value={formData.communication.tone}
-              onChange={(event) => handleChange('communication.tone', event.target.value)}
-              className={inputBase}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Idioma</label>
-            <input
-              type="text"
-              value={formData.communication.language}
-              onChange={(event) => handleChange('communication.language', event.target.value)}
-              className={inputBase}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Tratamento</label>
-            <input
-              type="text"
-              value={formData.communication.formality}
-              onChange={(event) => handleChange('communication.formality', event.target.value)}
-              className={inputBase}
-            />
-          </div>
-        </div>
-
+      <Section
+        icon={Images}
+        title="Referências visuais"
+        description="Envie ou cole posts que representem o estilo visual desejado."
+      >
         <div className="grid gap-4 md:grid-cols-2">
           <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Características da marca</label>
-            <textarea
-              value={stringifyList(formData.communication.characteristics)}
-              onChange={(event) => handleListChange('communication.characteristics', event.target.value)}
-              className={`${inputBase} min-h-[120px]`}
-              placeholder="Uma por linha"
+            <label className="text-sm font-medium text-text/80">Uploads de referência</label>
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={async (event) => {
+                await handleFileUpload('brandIdentity.visualReferences.uploads', event.target.files);
+                event.target.value = '';
+              }}
+              className={`${inputBase} file:mr-4 file:rounded-lg file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white`}
             />
-            {errors['communication.characteristics'] && (
-              <p className="text-xs font-medium text-error">{errors['communication.characteristics']}</p>
-            )}
+            <AttachmentList
+              items={formData.brandIdentity.visualReferences.uploads}
+              onRemove={(fileId) => handleFileRemove('brandIdentity.visualReferences.uploads', fileId)}
+            />
           </div>
           <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Temas de conteúdo recorrentes</label>
+            <label className="text-sm font-medium text-text/80">Links de posts e referências</label>
             <textarea
-              value={stringifyList(formData.communication.contentThemes)}
-              onChange={(event) => handleListChange('communication.contentThemes', event.target.value)}
+              value={stringifyList(formData.brandIdentity.visualReferences.links)}
+              onChange={(event) => handleListChange('brandIdentity.visualReferences.links', event.target.value)}
               className={`${inputBase} min-h-[120px]`}
-              placeholder="Uma por linha"
+              placeholder="Cole um link por linha (Instagram, Behance, Pinterest, etc.)"
             />
-            {errors['communication.contentThemes'] && (
-              <p className="text-xs font-medium text-error">{errors['communication.contentThemes']}</p>
-            )}
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Público-Alvo</label>
-            <input
-              type="text"
-              value={formData.communication.targetAudience.profile}
-              onChange={(event) => handleChange('communication.targetAudience.profile', event.target.value)}
-              className={inputBase}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Dores (uma por linha)</label>
-            <textarea
-              value={stringifyList(formData.communication.targetAudience.painPoints)}
-              onChange={(event) => handleListChange('communication.targetAudience.painPoints', event.target.value)}
-              className={`${inputBase} min-h-[120px]`}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Interesses (uma por linha)</label>
-            <textarea
-              value={stringifyList(formData.communication.targetAudience.interests)}
-              onChange={(event) => handleListChange('communication.targetAudience.interests', event.target.value)}
-              className={`${inputBase} min-h-[120px]`}
-            />
-          </div>
+        <div className="flex flex-col gap-2">
+          <label className="text-sm font-medium text-text/80">Observações sobre o estilo visual</label>
+          <textarea
+            value={formData.brandIdentity.visualReferences.notes}
+            onChange={(event) => handleChange('brandIdentity.visualReferences.notes', event.target.value)}
+            className={`${inputBase} min-h-[120px]`}
+            placeholder="Descreva os elementos que não podem faltar ou cuidados ao reproduzir o estilo."
+          />
         </div>
       </Section>
 
-      <Section icon={XCircle} title="Referências" description="Links e exemplos que ajudam a guiar a IA.">
-        <div className="grid gap-4 md:grid-cols-2">
+      <Section
+        icon={Sparkles}
+        title="Comunicação"
+        description="Defina o tom de voz e as diretrizes gerais de conteúdo."
+      >
+        <div className="grid gap-4 md:grid-cols-3">
           <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">URLs de referência</label>
-            <textarea
-              value={stringifyList(formData.examples.referenceUrls)}
-              onChange={(event) => handleListChange('examples.referenceUrls', event.target.value)}
-              className={`${inputBase} min-h-[120px]`}
-              placeholder="https://..."
-            />
+            <label className="text-sm font-medium text-text/80">Tom de voz</label>
+            <select
+              value={formData.communication.tone}
+              onChange={(event) => handleToneChange(event.target.value)}
+              className={inputBase}
+            >
+              {toneOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            {toneIsCustom && (
+              <input
+                type="text"
+                value={formData.communication.customTone}
+                onChange={(event) => handleChange('communication.customTone', event.target.value)}
+                className={inputBase}
+                placeholder="Descreva o tom personalizado"
+              />
+            )}
+            {errors['communication.tone'] && <p className="text-xs font-medium text-error">{errors['communication.tone']}</p>}
+            {errors['communication.customTone'] && (
+              <p className="text-xs font-medium text-error">{errors['communication.customTone']}</p>
+            )}
           </div>
           <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-text/80">Exemplos de sucesso</label>
+            <label className="text-sm font-medium text-text/80">Idioma</label>
+            <select
+              value={formData.communication.language}
+              onChange={(event) => handleChange('communication.language', event.target.value)}
+              className={inputBase}
+            >
+              {languageOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            {errors['communication.language'] && (
+              <p className="text-xs font-medium text-error">{errors['communication.language']}</p>
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-text/80">Notas adicionais</label>
             <textarea
-              value={formData.examples.successfulExamples}
-              onChange={(event) => handleChange('examples.successfulExamples', event.target.value)}
+              value={formData.communication.additionalNotes}
+              onChange={(event) => handleChange('communication.additionalNotes', event.target.value)}
               className={`${inputBase} min-h-[120px]`}
+              placeholder="Inclua orientações específicas sobre linguagem, CTA ou ofertas."
             />
           </div>
         </div>
