@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
 const ACCESS_STORAGE_KEY = 'icg.access.hash';
+const SKIP_STORAGE_KEY = 'icg.access.skip';
 
 const parseList = (value) =>
   value
@@ -38,6 +39,7 @@ const persistHash = (hash, remember) => {
   try {
     window.sessionStorage.removeItem(ACCESS_STORAGE_KEY);
     window.localStorage.removeItem(ACCESS_STORAGE_KEY);
+    window.sessionStorage.removeItem(SKIP_STORAGE_KEY);
 
     if (!hash) {
       return;
@@ -50,6 +52,27 @@ const persistHash = (hash, remember) => {
     }
   } catch (error) {
     console.error('[AccessGate] Failed to persist access hash', error);
+  }
+};
+
+const markSkipLogin = () => {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.sessionStorage.setItem(SKIP_STORAGE_KEY, '1');
+  } catch (error) {
+    console.error('[AccessGate] Failed to persist skip login flag', error);
+  }
+};
+
+const getSkipLogin = () => {
+  if (typeof window === 'undefined') return false;
+
+  try {
+    return window.sessionStorage.getItem(SKIP_STORAGE_KEY) === '1';
+  } catch (error) {
+    console.error('[AccessGate] Failed to read skip login flag', error);
+    return false;
   }
 };
 
@@ -74,6 +97,11 @@ export const AccessGate = ({ children }) => {
 
   useEffect(() => {
     if (!hasProtection) {
+      setStatus('granted');
+      return;
+    }
+
+    if (getSkipLogin()) {
       setStatus('granted');
       return;
     }
@@ -150,6 +178,11 @@ export const AccessGate = ({ children }) => {
     }
   };
 
+  const handleContinueWithoutLogin = () => {
+    markSkipLogin();
+    setStatus('granted');
+  };
+
   if (status === 'granted' || !hasProtection) {
     return children;
   }
@@ -210,6 +243,15 @@ export const AccessGate = ({ children }) => {
             disabled={isSubmitting}
           >
             {isSubmitting ? 'Validando…' : 'Entrar'}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleContinueWithoutLogin}
+            className="w-full rounded-lg border border-primary/30 px-4 py-2 text-sm font-medium text-primary transition hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            disabled={isSubmitting}
+          >
+            Continuar sem login
           </button>
         </form>
       </div>
