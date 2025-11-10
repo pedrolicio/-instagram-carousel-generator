@@ -218,6 +218,34 @@ export const BrandKitForm = ({ initialData, onSubmit, onCancel }) => {
     });
   };
 
+  const handleClipboardUpload = async (path, clipboardData) => {
+    if (!clipboardData?.items) return;
+
+    const files = Array.from(clipboardData.items)
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item, index) => {
+        const file = item.getAsFile();
+        if (!file) return null;
+
+        if (file.name) {
+          return file;
+        }
+
+        const extension = file.type?.split('/')?.[1] ?? 'png';
+        const filename = `imagem-colada-${Date.now()}-${index + 1}.${extension}`;
+        try {
+          return new File([file], filename, { type: file.type || 'image/png', lastModified: Date.now() });
+        } catch (error) {
+          return file;
+        }
+      })
+      .filter(Boolean);
+
+    if (!files.length) return;
+
+    await handleFileUpload(path, files);
+  };
+
   const handleFileRemove = (path, fileId) => {
     setFormData((prev) => {
       const next = clone(prev);
@@ -329,16 +357,29 @@ export const BrandKitForm = ({ initialData, onSubmit, onCancel }) => {
         <div className="grid gap-4 md:grid-cols-2">
           <div className="flex flex-col gap-2">
             <label className="text-sm font-medium text-text/80">Uploads de referência</label>
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={async (event) => {
-                await handleFileUpload('brandIdentity.visualReferences.uploads', event.target.files);
-                event.target.value = '';
+            <div
+              tabIndex={0}
+              onPaste={async (event) => {
+                event.preventDefault();
+                await handleClipboardUpload('brandIdentity.visualReferences.uploads', event.clipboardData);
               }}
-              className={`${inputBase} file:mr-4 file:rounded-lg file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white`}
-            />
+              className="rounded-xl border border-dashed border-primary/30 bg-background/60 p-4 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+            >
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={async (event) => {
+                  await handleFileUpload('brandIdentity.visualReferences.uploads', event.target.files);
+                  event.target.value = '';
+                }}
+                className={`${inputBase} file:mr-4 file:rounded-lg file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white`}
+              />
+              <p className="mt-3 text-xs text-text/60">
+                Clique aqui e use <kbd className="rounded bg-text/10 px-1 py-0.5 text-[10px] uppercase tracking-wide">Ctrl</kbd> +
+                <kbd className="rounded bg-text/10 px-1 py-0.5 text-[10px] uppercase tracking-wide">V</kbd> para colar imagens copiadas.
+              </p>
+            </div>
             <AttachmentList
               items={formData.brandIdentity.visualReferences.uploads}
               onRemove={(fileId) => handleFileRemove('brandIdentity.visualReferences.uploads', fileId)}
