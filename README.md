@@ -64,7 +64,9 @@ No menu **Configurações**, informe as chaves das APIs:
 - **Anthropic API Key**: usada para gerar o conteúdo textual.
 - **Google AI API Key**: usada para gerar imagens com a Imagen 3.
 
-As chaves são armazenadas em `localStorage`, codificadas em base64.
+As chaves são criptografadas localmente com AES-GCM via Web Crypto antes de serem salvas no `localStorage`. Para acessar ou atualizar
+as chaves é necessário informar a mesma frase-secreta utilizada na criptografia. Opcionalmente é possível lembrar a frase apenas
+durante a sessão atual (armazenada em `sessionStorage`).
 
 ## 🧪 Observações
 
