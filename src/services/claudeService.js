@@ -1,0 +1,59 @@
+import { buildClaudePrompt } from '../utils/promptBuilder.js';
+
+const CLAUDE_CONFIG = {
+  model: 'claude-sonnet-4-20250514',
+  max_tokens: 4000,
+  temperature: 0.7
+};
+
+export async function generateCarouselContent({ theme, brandKit, apiKey, signal }) {
+  if (!theme) {
+    throw new Error('Informe um tema para gerar o carrossel.');
+  }
+
+  if (!apiKey) {
+    throw new Error('Configure a Anthropic API Key antes de gerar conteúdo.');
+  }
+
+  const prompt = buildClaudePrompt(theme, brandKit);
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: CLAUDE_CONFIG.model,
+      max_tokens: CLAUDE_CONFIG.max_tokens,
+      temperature: CLAUDE_CONFIG.temperature,
+      messages: [
+        {
+          role: 'user',
+          content: prompt
+        }
+      ]
+    }),
+    signal
+  });
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => ({}));
+    throw new Error(errorPayload?.error?.message || 'Falha ao gerar conteúdo com a Claude API.');
+  }
+
+  const data = await response.json();
+  const rawContent = data?.content?.[0]?.text;
+
+  if (!rawContent) {
+    throw new Error('Resposta da Claude API não contém conteúdo válido.');
+  }
+
+  try {
+    return JSON.parse(rawContent);
+  } catch (error) {
+    console.error('[claudeService] Failed to parse JSON response', error, rawContent);
+    throw new Error('Não foi possível interpretar a resposta da Claude API.');
+  }
+}
