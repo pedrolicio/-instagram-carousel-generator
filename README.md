@@ -22,6 +22,7 @@ src/
 │   ├── ClientManager.jsx
 │   ├── ContentPreview.jsx
 │   ├── HistoryView.jsx
+│   ├── AccessGate.jsx
 │   └── ImageGenerator.jsx
 ├── context/
 │   └── AppContext.jsx
@@ -56,6 +57,24 @@ src/
    ```
 
 3. Acesse em [http://localhost:5173](http://localhost:5173).
+
+## 🔑 Controle de acesso
+
+O painel pode ser protegido por um código de acesso simples, exigido antes de exibir a aplicação. Configure um arquivo `.env`
+com uma das variáveis abaixo antes de rodar o build/deploy:
+
+- `VITE_ACCESS_CODES`: lista separada por vírgulas com os códigos em texto puro (ex.: `VITE_ACCESS_CODES=senha1,senha2`).
+- `VITE_ACCESS_CODE_HASHES`: lista separada por vírgulas com os hashes SHA-256 dos códigos. Use esta opção quando quiser evitar
+  expor os códigos em texto claro no bundle final.
+
+Para gerar o hash de um código, execute no terminal:
+
+```bash
+node -e "import('crypto').then(({ createHash }) => console.log(createHash('sha256').update('SEU-CODIGO').digest('hex')));"
+```
+
+Durante o login, o usuário pode optar por lembrar o dispositivo. Nesse caso o hash é guardado no `localStorage`; caso contrário
+é salvo apenas na sessão atual (`sessionStorage`).
 
 ## 🔐 Configuração das APIs
 
