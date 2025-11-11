@@ -19,11 +19,17 @@ const DEFAULT_SETTINGS = {
   anthropicTestMode: false
 };
 
+export const CAROUSEL_STORAGE_ERROR_MESSAGE =
+  'Não foi possível salvar o histórico local. Remova alguns itens e tente novamente.';
+
+const MAX_CAROUSEL_HISTORY = 20;
+
 const AppContext = createContext(undefined);
 
 export const AppProvider = ({ children }) => {
   const [clients, setClients] = useState([]);
   const [carousels, setCarousels] = useState([]);
+  const [carouselStorageError, setCarouselStorageError] = useState('');
   const [apiKeys, setApiKeys] = useState({ anthropic: '', google: '' });
   const [apiKeysUnlocked, setApiKeysUnlocked] = useState(false);
   const [hasStoredApiKeys, setHasStoredApiKeys] = useState(false);
@@ -34,7 +40,10 @@ export const AppProvider = ({ children }) => {
 
   useEffect(() => {
     setClients(getClientsFromStorage());
-    setCarousels(getCarouselsFromStorage());
+    const storedCarousels = getCarouselsFromStorage();
+    const limitedCarousels = storedCarousels.slice(0, MAX_CAROUSEL_HISTORY);
+    setCarousels(limitedCarousels);
+    saveCarouselsToStorage(limitedCarousels);
   }, []);
 
   useEffect(() => {
@@ -42,12 +51,49 @@ export const AppProvider = ({ children }) => {
   }, [clients]);
 
   useEffect(() => {
-    saveCarouselsToStorage(carousels);
-  }, [carousels]);
-
-  useEffect(() => {
     saveSettingsToStorage(settings);
   }, [settings]);
+
+  const persistCarousels = useCallback(
+    (updater) => {
+      let didPersist = false;
+
+      setCarousels((previous) => {
+        const updated = typeof updater === 'function' ? updater(previous) : updater;
+        const normalized = Array.isArray(updated) ? updated : [];
+        const trimmed = normalized.slice(0, MAX_CAROUSEL_HISTORY);
+        const saved = saveCarouselsToStorage(trimmed);
+
+        if (!saved) {
+          setCarouselStorageError(CAROUSEL_STORAGE_ERROR_MESSAGE);
+          didPersist = false;
+          return previous;
+        }
+
+        setCarouselStorageError('');
+        didPersist = true;
+        return trimmed;
+      });
+
+      return didPersist;
+    },
+    [setCarouselStorageError, saveCarouselsToStorage]
+  );
+
+  const addCarousel = useCallback((carousel) => persistCarousels((prev) => [carousel, ...prev]), [persistCarousels]);
+
+  const updateCarousel = useCallback(
+    (carouselId, patch) =>
+      persistCarousels((prev) =>
+        prev.map((carousel) => (carousel.id === carouselId ? { ...carousel, ...patch } : carousel))
+      ),
+    [persistCarousels]
+  );
+
+  const removeCarousel = useCallback(
+    (carouselId) => persistCarousels((prev) => prev.filter((carousel) => carousel.id !== carouselId)),
+    [persistCarousels]
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -145,11 +191,12 @@ export const AppProvider = ({ children }) => {
     clearStorage();
     setClients([]);
     setCarousels([]);
+    setCarouselStorageError('');
     lockApiKeys();
     setHasStoredApiKeys(false);
     setApiKeysEncrypted(false);
     setSettings(DEFAULT_SETTINGS);
-  }, [lockApiKeys]);
+  }, [lockApiKeys, setCarouselStorageError]);
 
   const updateSettings = useCallback((patch) => {
     setSettings((prev) => ({ ...prev, ...patch }));
@@ -165,10 +212,9 @@ export const AppProvider = ({ children }) => {
         ),
       removeClient: (clientId) => setClients((prev) => prev.filter((client) => client.id !== clientId)),
       carousels,
-      addCarousel: (carousel) => setCarousels((prev) => [carousel, ...prev]),
-      updateCarousel: (carouselId, patch) =>
-        setCarousels((prev) => prev.map((carousel) => (carousel.id === carouselId ? { ...carousel, ...patch } : carousel))),
-      removeCarousel: (carouselId) => setCarousels((prev) => prev.filter((carousel) => carousel.id !== carouselId)),
+      addCarousel,
+      updateCarousel,
+      removeCarousel,
       apiKeys,
       apiKeysUnlocked,
       hasStoredApiKeys,
@@ -180,11 +226,15 @@ export const AppProvider = ({ children }) => {
       unlockApiKeys,
       lockApiKeys,
       clearAllData,
-      updateSettings
+      updateSettings,
+      carouselStorageError
     }),
     [
       clients,
       carousels,
+      addCarousel,
+      updateCarousel,
+      removeCarousel,
       apiKeys,
       apiKeysUnlocked,
       hasStoredApiKeys,
@@ -196,7 +246,8 @@ export const AppProvider = ({ children }) => {
       unlockApiKeys,
       lockApiKeys,
       clearAllData,
-      updateSettings
+      updateSettings,
+      carouselStorageError
     ]
   );
 

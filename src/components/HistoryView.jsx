@@ -12,7 +12,7 @@ const formatDateTime = (iso) =>
   });
 
 export const HistoryView = ({ onSelectClient, onOpenGenerator }) => {
-  const { carousels, clients, removeCarousel } = useAppContext();
+  const { carousels, clients, removeCarousel, carouselStorageError } = useAppContext();
   const [clientFilter, setClientFilter] = useState('all');
   const [query, setQuery] = useState('');
 
@@ -75,6 +75,10 @@ export const HistoryView = ({ onSelectClient, onOpenGenerator }) => {
           />
         </div>
       </header>
+
+      {carouselStorageError && (
+        <div className="rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">{carouselStorageError}</div>
+      )}
 
       <div className="grid gap-4">
         {filteredCarousels.map((carousel) => {

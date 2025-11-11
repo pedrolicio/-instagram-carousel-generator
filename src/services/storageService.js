@@ -78,11 +78,13 @@ const readStorage = (key, fallback) => {
 };
 
 const writeStorage = (key, value) => {
-  if (!isBrowser) return;
+  if (!isBrowser) return true;
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch (error) {
     console.error(`[storage] Failed to write key ${key}`, error);
+    return false;
   }
 };
 
@@ -179,8 +181,50 @@ const decryptWithSecret = async (secret, payload) => {
 export const getClientsFromStorage = () => readStorage(STORAGE_KEYS.clients, []);
 export const saveClientsToStorage = (clients) => writeStorage(STORAGE_KEYS.clients, clients);
 
-export const getCarouselsFromStorage = () => readStorage(STORAGE_KEYS.carousels, []);
-export const saveCarouselsToStorage = (carousels) => writeStorage(STORAGE_KEYS.carousels, carousels);
+const sanitizeCarouselImage = (image) => {
+  if (!image || typeof image !== 'object') {
+    return {
+      slideNumber: image?.slideNumber ?? null,
+      status: 'pending',
+      imageUrl: null
+    };
+  }
+
+  const rawUrl = typeof image.imageUrl === 'string' ? image.imageUrl : null;
+  const imageUrl = rawUrl && rawUrl.startsWith('data:') ? null : rawUrl;
+
+  return {
+    slideNumber: image.slideNumber,
+    status: image.status ?? (imageUrl ? 'generated' : 'pending'),
+    imageUrl: imageUrl ?? null
+  };
+};
+
+const sanitizeCarouselForStorage = (carousel) => {
+  if (!carousel || typeof carousel !== 'object') {
+    return carousel;
+  }
+
+  const images = Array.isArray(carousel.images)
+    ? carousel.images.map((image) => sanitizeCarouselImage(image))
+    : [];
+
+  return {
+    ...carousel,
+    images
+  };
+};
+
+const sanitizeCarouselsForStorage = (carousels) => {
+  if (!Array.isArray(carousels)) {
+    return [];
+  }
+
+  return carousels.map((carousel) => sanitizeCarouselForStorage(carousel));
+};
+
+export const getCarouselsFromStorage = () => sanitizeCarouselsForStorage(readStorage(STORAGE_KEYS.carousels, []));
+export const saveCarouselsToStorage = (carousels) => writeStorage(STORAGE_KEYS.carousels, sanitizeCarouselsForStorage(carousels));
 
 export const getSettingsFromStorage = () => readStorage(STORAGE_KEYS.settings, DEFAULT_SETTINGS);
 export const saveSettingsToStorage = (settings) =>
