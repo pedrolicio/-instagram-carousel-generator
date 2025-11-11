@@ -31,6 +31,54 @@ const normalizeJsonText = (text) =>
     .replace(/\r\n/g, '\n')
     .trim();
 
+const MAX_TEXT_EXTRACTION_DEPTH = 4;
+
+const extractTextValue = (candidate, depth = 0) => {
+  if (candidate == null || depth >= MAX_TEXT_EXTRACTION_DEPTH) {
+    return '';
+  }
+
+  if (typeof candidate === 'string') {
+    return candidate.trim();
+  }
+
+  if (typeof candidate === 'number' || typeof candidate === 'boolean') {
+    return String(candidate).trim();
+  }
+
+  if (Array.isArray(candidate)) {
+    return candidate
+      .map((item) => extractTextValue(item, depth + 1))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+
+  if (typeof candidate === 'object') {
+    if (typeof candidate.text === 'string') {
+      return candidate.text.trim();
+    }
+
+    return Object.values(candidate)
+      .map((value) => extractTextValue(value, depth + 1))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+
+  return '';
+};
+
+const pickTextValue = (...candidates) => {
+  for (const value of candidates) {
+    const text = extractTextValue(value);
+    if (text) {
+      return text;
+    }
+  }
+  return '';
+};
+
 const tryParseJson = (candidate) => {
   const normalized = normalizeJsonText(candidate);
   if (!normalized) return null;
@@ -225,23 +273,14 @@ function normalizeSlide(rawSlide = {}, index = 0) {
     rawSlide = {};
   }
 
-  const pickString = (...candidates) => {
-    for (const value of candidates) {
-      if (typeof value === 'string' && value.trim().length) {
-        return value.trim();
-      }
-    }
-    return '';
-  };
-
   return {
     ...rawSlide,
     slideNumber: resolveSlideNumber(rawSlide.slideNumber, rawSlide.number, rawSlide.index, index),
     type: rawSlide.type ?? rawSlide.role ?? rawSlide.layout,
-    title: pickString(rawSlide.title, rawSlide.heading, rawSlide.headline, rawSlide.topic),
-    subtitle: pickString(rawSlide.subtitle, rawSlide.subheading, rawSlide.sub_title, rawSlide.summary),
-    body: pickString(rawSlide.body, rawSlide.content, rawSlide.text, rawSlide.description),
-    visualDescription: pickString(
+    title: pickTextValue(rawSlide.title, rawSlide.heading, rawSlide.headline, rawSlide.topic),
+    subtitle: pickTextValue(rawSlide.subtitle, rawSlide.subheading, rawSlide.sub_title, rawSlide.summary),
+    body: pickTextValue(rawSlide.body, rawSlide.content, rawSlide.text, rawSlide.description, rawSlide.sections),
+    visualDescription: pickTextValue(
       rawSlide.visualDescription,
       rawSlide.visual_description,
       rawSlide.visualNotes,
@@ -286,22 +325,7 @@ function normalizeCaption(rawCaption) {
     };
   }
 
-  const pickString = (...candidates) => {
-    for (const value of candidates) {
-      if (typeof value === 'string' && value.trim().length) {
-        return value.trim();
-      }
-      if (Array.isArray(value) && value.length && value.every((item) => typeof item === 'string')) {
-        const joined = value.join('\n').trim();
-        if (joined.length) {
-          return joined;
-        }
-      }
-    }
-    return '';
-  };
-
-  const text = pickString(
+  const text = pickTextValue(
     rawCaption.text,
     rawCaption.body,
     rawCaption.caption,
@@ -311,7 +335,7 @@ function normalizeCaption(rawCaption) {
     rawCaption.paragraphs
   );
 
-  const cta = pickString(rawCaption.cta, rawCaption.callToAction, rawCaption.call_to_action, rawCaption.callout);
+  const cta = pickTextValue(rawCaption.cta, rawCaption.callToAction, rawCaption.call_to_action, rawCaption.callout);
   const hashtags = normalizeHashtags(
     rawCaption.hashtags,
     rawCaption.tags,

@@ -75,6 +75,32 @@ const formatNetworkError = (error, fallbackMessage) => {
   return enhanced;
 };
 
+const getModelAvailabilityHelp = (error) => {
+  if (!error) return null;
+
+  const rawMessage = error.payload?.error?.message || error.message || '';
+  const message = rawMessage.toLowerCase();
+
+  if (!message) return null;
+
+  const genericHelp =
+    'Sua chave da Google AI não tem acesso ao modelo solicitado. Acesse o Google AI Studio, habilite o Image Generation para o projeto da chave ou gere uma nova chave com esse acesso.';
+
+  if (message.includes('imagen-3.0')) {
+    return `${genericHelp} Garanta que o modelo "imagen-3.0-generate-001" esteja disponível para uso.`;
+  }
+
+  if (message.includes('imagegeneration@002') || message.includes('imagegeneration')) {
+    return `${genericHelp} Habilite o modelo legacy "imagegeneration@002" como alternativa.`;
+  }
+
+  if (message.includes('not found') || message.includes('unsupported') || message.includes('does not exist')) {
+    return genericHelp;
+  }
+
+  return null;
+};
+
 // --- Chamadas às APIs ---
 
 const callFallbackGenerate = async ({ prompt, negativePrompt, apiKey, signal }) => {
@@ -172,7 +198,30 @@ export async function generateSlideImage({ prompt, negativePrompt, apiKey, signa
       );
     } catch (fallbackError) {
       const formatted = formatNetworkError(fallbackError);
-      if (formatted === fallbackError && generateImagesError?.message) {
+      const helpMessage =
+        getModelAvailabilityHelp(fallbackError) || getModelAvailabilityHelp(generateImagesError);
+
+      if (helpMessage) {
+        const detailSegments = [];
+        const fallbackMessage = fallbackError?.message;
+        const previousMessage = generateImagesError?.message;
+
+        if (fallbackMessage && !helpMessage.toLowerCase().includes(fallbackMessage.toLowerCase())) {
+          detailSegments.push(`Detalhes: ${fallbackMessage}`);
+        }
+
+        if (
+          previousMessage &&
+          previousMessage !== fallbackMessage &&
+          !detailSegments.some((segment) => segment.toLowerCase().includes(previousMessage.toLowerCase()))
+        ) {
+          detailSegments.push(`Tentativa anterior: ${previousMessage}`);
+        }
+
+        formatted.message = detailSegments.length
+          ? `${helpMessage} (${detailSegments.join(' | ')})`
+          : helpMessage;
+      } else if (formatted === fallbackError && generateImagesError?.message) {
         formatted.message = `${formatted.message} (tentativa anterior: ${generateImagesError.message})`;
       }
       throw formatted;
