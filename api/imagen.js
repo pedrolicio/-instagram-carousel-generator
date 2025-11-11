@@ -19,7 +19,6 @@ const QUOTA_ERROR_MESSAGE =
   'Limite de uso da Google AI API excedido. Revise seu plano de faturamento ou aguarde antes de tentar novamente.';
 
 const baseHeaders = {
-  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type,X-Goog-Api-Key'
 };
@@ -505,7 +504,11 @@ const callLegacyImagenApi = async ({ endpoint, prompt, negativePrompt, apiKey })
   return response.json();
 };
 
-const buildErrorResponse = (status, message, { details, retryAfterSeconds } = {}) => {
+const buildErrorResponse = (
+  status,
+  message,
+  { details, retryAfterSeconds, allowedOrigin } = {}
+) => {
   const payload = {
     error: {
       message
@@ -525,6 +528,10 @@ const buildErrorResponse = (status, message, { details, retryAfterSeconds } = {}
     ...baseHeaders
   };
 
+  if (allowedOrigin) {
+    headers['Access-Control-Allow-Origin'] = allowedOrigin;
+  }
+
   if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
     headers['Retry-After'] = Math.max(1, Math.ceil(retryAfterSeconds)).toString();
   }
@@ -535,7 +542,7 @@ const buildErrorResponse = (status, message, { details, retryAfterSeconds } = {}
   });
 };
 
-const respondWithError = (error, fallbackDetails) => {
+const respondWithError = (error, fallbackDetails, allowedOrigin) => {
   const helpMessage = getModelAvailabilityHelp(error);
   const isQuotaError = isQuotaExceededError(error);
   const retryAfterSeconds = resolveRetryAfterSeconds(error);
@@ -547,20 +554,26 @@ const respondWithError = (error, fallbackDetails) => {
 
   return buildErrorResponse(error.status || 500, message, {
     details,
-    retryAfterSeconds
+    retryAfterSeconds,
+    allowedOrigin
   });
 };
 
 export default async function handler(request) {
+  const allowedOrigin = process.env.ALLOWED_ORIGIN || 'http://localhost:3000';
+
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
-      headers: baseHeaders
+      headers: {
+        ...baseHeaders,
+        'Access-Control-Allow-Origin': allowedOrigin
+      }
     });
   }
 
   if (request.method !== 'POST') {
-    return buildErrorResponse(405, 'Método não permitido. Utilize POST.');
+    return buildErrorResponse(405, 'Método não permitido. Utilize POST.', { allowedOrigin });
   }
 
   let body = null;
@@ -568,17 +581,19 @@ export default async function handler(request) {
   try {
     body = await request.json();
   } catch (error) {
-    return buildErrorResponse(400, 'Corpo da requisição inválido.');
+    return buildErrorResponse(400, 'Corpo da requisição inválido.', { allowedOrigin });
   }
 
-  const { prompt, negativePrompt, apiKey } = body || {};
+  const { prompt, negativePrompt } = body || {};
+
+  const apiKey = process.env.GOOGLE_API_KEY;
 
   if (!apiKey) {
-    return buildErrorResponse(400, 'Configure a Google AI API Key antes de gerar imagens.');
+    return buildErrorResponse(500, 'A API Key não está configurada no servidor.', { allowedOrigin });
   }
 
   if (!prompt || typeof prompt !== 'string') {
-    return buildErrorResponse(400, 'O prompt para geração de imagem é obrigatório.');
+    return buildErrorResponse(400, 'O prompt para geração de imagem é obrigatório.', { allowedOrigin });
   }
 
   try {
@@ -594,12 +609,13 @@ export default async function handler(request) {
       status: 200,
       headers: {
         'Content-Type': 'application/json',
-        ...baseHeaders
+        ...baseHeaders,
+        'Access-Control-Allow-Origin': allowedOrigin
       }
     });
   } catch (primaryError) {
     if (!shouldRetryWithFallbackModel(primaryError)) {
-      return respondWithError(primaryError);
+      return respondWithError(primaryError, undefined, allowedOrigin);
     }
 
     try {
@@ -620,13 +636,18 @@ export default async function handler(request) {
         status: 200,
         headers: {
           'Content-Type': 'application/json',
-          ...baseHeaders
+          ...baseHeaders,
+          'Access-Control-Allow-Origin': allowedOrigin
         }
       });
     } catch (legacyError) {
       if (!shouldRetryWithFallbackModel(legacyError)) {
         legacyError.cause = primaryError || legacyError.cause;
-        return respondWithError(legacyError, legacyError.payload || primaryError.payload);
+        return respondWithError(
+          legacyError,
+          legacyError.payload || primaryError.payload,
+          allowedOrigin
+        );
       }
 
       try {
@@ -647,16 +668,16 @@ export default async function handler(request) {
           status: 200,
           headers: {
             'Content-Type': 'application/json',
-            ...baseHeaders
+            ...baseHeaders,
+            'Access-Control-Allow-Origin': allowedOrigin
           }
         });
       } catch (fallbackError) {
         fallbackError.cause = primaryError || legacyError;
-        const helpMessage = getModelAvailabilityHelp(fallbackError) || getModelAvailabilityHelp(legacyError) || getModelAvailabilityHelp(primaryError);
-
         const details = fallbackError.payload || legacyError.payload || primaryError.payload;
-        return respondWithError(fallbackError, details);
+        return respondWithError(fallbackError, details, allowedOrigin);
       }
     }
   }
 }
+
