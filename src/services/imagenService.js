@@ -16,6 +16,8 @@ const IMAGEN_CONFIG = {
 };
 const NETWORK_ERROR_MESSAGE =
   'Não foi possível se conectar à Imagen API. Verifique sua conexão com a internet, a chave de API e tente novamente.';
+const QUOTA_ERROR_MESSAGE =
+  'Limite de uso da Google AI API excedido. Revise seu plano de faturamento ou aguarde antes de tentar novamente.';
 
 const createApiError = async (response) => {
   const errorPayload = await response.json().catch(() => ({}));
@@ -271,6 +273,98 @@ const shouldBypassProxy = (error) => {
   return message.includes('not found') || message.includes('edge function');
 };
 
+const isQuotaExceededError = (error) => {
+  if (!error) return false;
+
+  if (error.status === 429) return true;
+
+  const payloadError = error.payload?.error || error.payload;
+  const payloadStatus = payloadError?.status;
+  const payloadCode = payloadError?.code;
+
+  if (payloadCode === 429 || payloadStatus === 429 || payloadStatus === 'RESOURCE_EXHAUSTED') {
+    return true;
+  }
+
+  const message = (payloadError?.message || error.message || '').toLowerCase();
+
+  return (
+    message.includes('quota') ||
+    message.includes('rate limit') ||
+    message.includes('exceeded your current quota') ||
+    message.includes('resource exhausted')
+  );
+};
+
+const parseRetryDelayFromDetails = (details) => {
+  if (!Array.isArray(details)) return null;
+
+  for (const detail of details) {
+    if (!detail || typeof detail !== 'object') continue;
+
+    const retryDelay = detail.retryDelay || detail?.metadata?.retryDelay;
+    if (!retryDelay) continue;
+
+    const seconds = Number(retryDelay.seconds ?? retryDelay?.seconds);
+    const nanos = Number(retryDelay.nanos ?? retryDelay?.nanos);
+
+    if (Number.isFinite(seconds) || Number.isFinite(nanos)) {
+      const totalSeconds = (Number.isFinite(seconds) ? seconds : 0) + (Number.isFinite(nanos) ? nanos / 1e9 : 0);
+      if (totalSeconds > 0) {
+        return totalSeconds;
+      }
+    }
+
+    if (typeof retryDelay === 'string') {
+      const numeric = Number(retryDelay.replace(/[^0-9.]/g, ''));
+      if (Number.isFinite(numeric) && numeric > 0) {
+        return numeric;
+      }
+    }
+  }
+
+  return null;
+};
+
+const parseRetryDelayFromMessage = (message) => {
+  if (typeof message !== 'string') return null;
+
+  const match = message.match(/retry in\s+([0-9]+(?:\.[0-9]+)?)s/i);
+  if (!match) return null;
+
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+};
+
+const getRetryDelayInSeconds = (error) => {
+  const payloadError = error?.payload?.error || error?.payload;
+
+  const detailsDelay = parseRetryDelayFromDetails(payloadError?.details);
+  if (detailsDelay) return detailsDelay;
+
+  const messageDelay = parseRetryDelayFromMessage(payloadError?.message || error?.message);
+  if (messageDelay) return messageDelay;
+
+  return null;
+};
+
+const createQuotaExceededError = (error) => {
+  const retryDelaySeconds = getRetryDelayInSeconds(error);
+  const quotaMessageSuffix = (() => {
+    if (!retryDelaySeconds) return '';
+
+    const roundedSeconds = Math.max(1, Math.round(retryDelaySeconds));
+    const plural = roundedSeconds > 1 ? 's' : '';
+    return ` Tente novamente em aproximadamente ${roundedSeconds} segundo${plural}.`;
+  })();
+
+  const quotaError = new Error(`${QUOTA_ERROR_MESSAGE}${quotaMessageSuffix}`);
+  quotaError.status = error?.status || 429;
+  quotaError.payload = error?.payload;
+  quotaError.originalError = error;
+  return quotaError;
+};
+
 export async function generateSlideImage({ prompt, negativePrompt, apiKey, signal }) {
   if (!apiKey) throw new Error('Configure a Google AI API Key antes de gerar imagens.');
 
@@ -285,12 +379,23 @@ export async function generateSlideImage({ prompt, negativePrompt, apiKey, signa
     });
   } catch (error) {
     if (shouldBypassProxy(error)) {
-      return callImagenApiDirectly({
-        prompt,
-        negativePrompt: resolvedNegativePrompt,
-        apiKey,
-        signal
-      });
+      try {
+        return await callImagenApiDirectly({
+          prompt,
+          negativePrompt: resolvedNegativePrompt,
+          apiKey,
+          signal
+        });
+      } catch (directError) {
+        if (isQuotaExceededError(directError)) {
+          throw createQuotaExceededError(directError);
+        }
+        throw directError;
+      }
+    }
+
+    if (isQuotaExceededError(error)) {
+      throw createQuotaExceededError(error);
     }
 
     if (error?.name === 'TypeError' || /network/i.test(error?.message || '')) {
