@@ -141,6 +141,33 @@ export const buildImagenPrompt = (slide, brandKit) => {
     .map(([key]) => key.replace('use', '').toLowerCase())
     .join(', ');
 
+  const audienceSummary = [
+    communication?.targetAudience?.profile,
+    formatArray(communication?.targetAudience?.interests ?? [])
+      ? `Interesses: ${formatArray(communication.targetAudience.interests)}`
+      : null,
+    formatArray(communication?.targetAudience?.painPoints ?? [])
+      ? `Dores: ${formatArray(communication.targetAudience.painPoints)}`
+      : null
+  ]
+    .filter(Boolean)
+    .join('. ');
+
+  const brandVoiceSummary = [
+    formatArray(communication?.characteristics ?? [])
+      ? `Características da marca: ${formatArray(communication.characteristics)}`
+      : null,
+    formatArray(communication?.contentThemes ?? [])
+      ? `Temas recorrentes: ${formatArray(communication.contentThemes)}`
+      : null,
+    communication?.additionalNotes,
+    communication?.briefingNotes,
+    communication?.notes
+  ]
+    .map((item) => (item ?? '').trim())
+    .filter(Boolean)
+    .join('. ');
+
   const descriptionParts = [
     slide.visualDescription || slide.title || 'Instagram carousel slide',
     resolvedTone ? `Tom geral: ${resolvedTone}` : null,
@@ -149,7 +176,9 @@ export const buildImagenPrompt = (slide, brandKit) => {
     layoutPreference ? `Composição desejada: ${layoutPreference}` : null,
     additionalElements ? `Elementos recorrentes: ${additionalElements}` : null,
     attachmentSummary ? `Considere materiais: ${attachmentSummary}` : null,
-    referenceNotes ? `Referências visuais: ${referenceNotes}` : null
+    referenceNotes ? `Referências visuais: ${referenceNotes}` : null,
+    audienceSummary ? `Público-alvo: ${audienceSummary}` : null,
+    brandVoiceSummary ? `Diretrizes de comunicação: ${brandVoiceSummary}` : null
   ].filter(Boolean);
 
   const textOverlay = [

@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server';
 
 export const runtime = 'edge';
 
+const IMAGEN_NANO_MODEL = 'imagen-3.0-nano-banana';
 const LEGACY_MODEL = 'imagegeneration@002';
 const GEMINI_MODEL = 'gemini-2.5-flash-image';
+const IMAGEN_NANO_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGEN_NANO_MODEL}:generateContent`;
 const LEGACY_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${LEGACY_MODEL}:generate`;
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
@@ -207,6 +209,26 @@ const callApi = async (url, payload, apiKey) => {
   return data;
 };
 
+const callImagenNanoModel = async ({ prompt, negativePrompt, apiKey }) => {
+  const url = new URL(IMAGEN_NANO_ENDPOINT);
+  url.searchParams.set('key', apiKey);
+
+  const promptText = negativePrompt ? `${prompt}\n\nRestrições: ${negativePrompt}` : prompt;
+
+  const payload = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: promptText }]
+      }
+    ]
+  };
+
+  const result = await callApi(url.toString(), payload, apiKey);
+  console.log(`[Imagen] Resposta ${IMAGEN_NANO_MODEL}:`, JSON.stringify(result));
+  return result;
+};
+
 const callLegacyModel = async ({ prompt, negativePrompt, apiKey }) => {
   const url = new URL(LEGACY_ENDPOINT);
   url.searchParams.set('key', apiKey);
@@ -253,13 +275,13 @@ const callGeminiModel = async ({ prompt, negativePrompt, apiKey }) => {
 
 const generateImage = async ({ prompt, negativePrompt, apiKey }) => {
   try {
-    const legacy = await callLegacyModel({ prompt, negativePrompt, apiKey });
-    const base64 = extractBase64(legacy);
+    const nano = await callImagenNanoModel({ prompt, negativePrompt, apiKey });
+    const base64 = extractBase64(nano);
     if (base64) {
       return base64;
     }
 
-    const safetyDetail = detectSafetyBlock(legacy);
+    const safetyDetail = detectSafetyBlock(nano);
     if (safetyDetail) {
       const safetyError = new Error('Bloqueado por segurança');
       safetyError.status = 422;
@@ -268,13 +290,16 @@ const generateImage = async ({ prompt, negativePrompt, apiKey }) => {
     }
 
     const noImageError = new Error(
-      `O modelo ${LEGACY_MODEL} não retornou imagem. Exemplo de prompt funcional: ${PROMPT_EXEMPLO}`
+      `O modelo ${IMAGEN_NANO_MODEL} não retornou imagem. Exemplo de prompt funcional: ${PROMPT_EXEMPLO}`
     );
     noImageError.status = 502;
-    noImageError.details = legacy;
+    noImageError.details = nano;
     throw noImageError;
   } catch (error) {
-    if (error.status && error.status < 500 && error.status !== 422) {
+    const isFallbackCandidate =
+      !error?.status || error.status >= 500 || error.status === 404 || error.status === 405;
+
+    if (!isFallbackCandidate && error.status !== 422) {
       throw error;
     }
 
@@ -301,8 +326,38 @@ const generateImage = async ({ prompt, negativePrompt, apiKey }) => {
       geminiError.details = gemini;
       throw geminiError;
     } catch (fallbackError) {
+      if (!isFallbackCandidate && fallbackError?.status && fallbackError.status < 500 && fallbackError.status !== 422) {
+        throw fallbackError;
+      }
+
       fallbackError.cause = error;
-      throw fallbackError;
+
+      try {
+        const legacy = await callLegacyModel({ prompt, negativePrompt, apiKey });
+        const base64 = extractBase64(legacy);
+        if (base64) {
+          return base64;
+        }
+
+        const safetyDetail = detectSafetyBlock(legacy);
+        if (safetyDetail) {
+          const safetyError = new Error('Bloqueado por segurança');
+          safetyError.status = 422;
+          safetyError.details = safetyDetail;
+          throw safetyError;
+        }
+
+        const legacyError = new Error(
+          `O modelo ${LEGACY_MODEL} não retornou imagem. Exemplo de prompt funcional: ${PROMPT_EXEMPLO}`
+        );
+        legacyError.status = 502;
+        legacyError.details = legacy;
+        legacyError.cause = fallbackError;
+        throw legacyError;
+      } catch (legacyError) {
+        legacyError.cause = legacyError.cause ?? fallbackError;
+        throw legacyError;
+      }
     }
   }
 };
