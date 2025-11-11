@@ -2,12 +2,14 @@ export const config = {
   runtime: 'edge'
 };
 
+const GEMINI_IMAGE_MODEL = 'gemini-2.5-flash-image';
 const GEMINI_IMAGE_ENDPOINT =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`;
 const LEGACY_GENERATE_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/imagegeneration:generate';
+const LEGACY_FALLBACK_MODEL = 'imagegeneration@002';
 const LEGACY_FALLBACK_GENERATE_ENDPOINT =
-  'https://generativelanguage.googleapis.com/v1beta/models/imagegeneration@002:generate';
+  `https://generativelanguage.googleapis.com/v1beta/models/${LEGACY_FALLBACK_MODEL}:generate`;
 
 const IMAGEN_CONFIG = {
   aspectRatio: '4:5',
@@ -15,6 +17,9 @@ const IMAGEN_CONFIG = {
   safetyFilterLevel: 'block_some',
   personGeneration: 'allow_adult'
 };
+// Prompt de referência usado nas mensagens de erro para guiar usuários.
+const PROMPT_EXAMPLE =
+  'Carrossel minimalista no Instagram mostrando uma banana estilizada. Slide de capa com banana geométrica central, segundo slide com close abstrato da casca, terceiro slide comparando tons amarelos, quarto slide com dica de styling em cenário branco, quinto slide com CTA. Estilo high-end, iluminação suave, espaço negativo para texto.';
 const QUOTA_ERROR_MESSAGE =
   'Limite de uso da Google AI API excedido. Revise seu plano de faturamento ou aguarde antes de tentar novamente.';
 
@@ -122,6 +127,83 @@ const collectCandidateContentParts = (payload) => {
   return parts;
 };
 
+const formatSafetyCategory = (category) =>
+  typeof category === 'string'
+    ? category
+        .replace(/^HARM_CATEGORY_/, '')
+        .replace(/_/g, ' ')
+        .toLowerCase()
+    : '';
+
+// Extraímos metadados de finalização do Gemini para expor o motivo do bloqueio.
+const collectGeminiDiagnostics = (payload) => {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+
+  const reasons = new Set();
+  const detailMessages = [];
+
+  const pushReason = (reason) => {
+    if (!reason || typeof reason !== 'string') return;
+    const normalized = reason.toUpperCase();
+    if (normalized) {
+      reasons.add(normalized);
+    }
+  };
+
+  const pushSafetyRatings = (ratings) => {
+    if (!Array.isArray(ratings)) return;
+
+    const blocked = ratings
+      .filter((rating) => rating?.blocked || rating?.probability === 'VERY_LIKELY')
+      .map((rating) => formatSafetyCategory(rating?.category))
+      .filter(Boolean);
+
+    if (blocked.length > 0) {
+      detailMessages.push(`Conteúdo bloqueado por segurança: ${blocked.join(', ')}.`);
+    }
+  };
+
+  const promptFeedback = payload?.promptFeedback || payload?.prompt_feedback;
+  if (promptFeedback && typeof promptFeedback === 'object') {
+    pushReason(promptFeedback.finishReason || promptFeedback.blockReason || promptFeedback.block_reason);
+    pushSafetyRatings(promptFeedback.safetyRatings || promptFeedback.safety_ratings);
+
+    const feedbackMessage = promptFeedback.feedback || promptFeedback.description;
+    if (feedbackMessage) {
+      detailMessages.push(String(feedbackMessage));
+    }
+  }
+
+  const candidates = payload?.candidates;
+  if (Array.isArray(candidates)) {
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== 'object') {
+        continue;
+      }
+
+      pushReason(candidate.finishReason || candidate.finish_reason);
+      pushSafetyRatings(candidate.safetyRatings || candidate.safety_ratings);
+
+      const candidateError = candidate.error || candidate.description || candidate?.content?.parts?.find?.((part) => part?.text)
+        ?.text;
+      if (candidateError) {
+        detailMessages.push(String(candidateError));
+      }
+    }
+  }
+
+  if (reasons.size === 0 && detailMessages.length === 0) {
+    return null;
+  }
+
+  return {
+    finishReason: reasons.size > 0 ? Array.from(reasons).join(', ') : null,
+    message: detailMessages.length > 0 ? Array.from(new Set(detailMessages)).join(' ') : null
+  };
+};
+
 const extractBase64Image = (payload) => {
   if (!payload) return '';
 
@@ -227,6 +309,7 @@ const fetchFileUriAsBase64 = async (fileUri, apiKey) => {
 
   let downloadUrl = fileUri;
 
+  // Prioriza o modelo legacy estável e só recorre ao Gemini como fallback.
   try {
     const url = new URL(fileUri);
     if (apiKey && !url.searchParams.has('key')) {
@@ -293,6 +376,39 @@ const resolveBase64Image = async (payload, { apiKey } = {}) => {
   }
 
   return fetchFileUriAsBase64(fileUri, apiKey);
+};
+
+// Garante que a resposta contenha a imagem em base64 ou propaga erro explicativo.
+const ensureBase64Image = async (payload, { apiKey, modelName }) => {
+  const base64Image = await resolveBase64Image(payload, { apiKey });
+  if (base64Image) {
+    return base64Image;
+  }
+
+  let message = `A resposta do modelo ${modelName} não contém imagem válida.`;
+  let status = 502;
+
+  if (modelName === GEMINI_IMAGE_MODEL) {
+    const geminiDiagnostics = collectGeminiDiagnostics(payload);
+    if (geminiDiagnostics?.finishReason) {
+      message = `O modelo ${modelName} não retornou imagem (finishReason: ${geminiDiagnostics.finishReason}).`;
+      if (geminiDiagnostics.message) {
+        message += ` Detalhes: ${geminiDiagnostics.message}`;
+      }
+      status = geminiDiagnostics.finishReason?.includes('SAFETY') ? 422 : 502;
+    } else {
+      message = `${message} Nenhum dado inline foi entregue pelo Gemini.`;
+    }
+  } else if (modelName === LEGACY_FALLBACK_MODEL) {
+    message = `${message} Reforce o prompt com mais detalhes visuais. Exemplo: ${PROMPT_EXAMPLE}`;
+  } else if (modelName === 'imagegeneration') {
+    message = `${message} Ajuste a descrição para algo mais específico. Exemplo: ${PROMPT_EXAMPLE}`;
+  }
+
+  const error = new Error(message);
+  error.status = status;
+  error.payload = payload;
+  throw error;
 };
 
 const buildGeminiPromptText = (prompt, negativePrompt) => {
@@ -548,7 +664,10 @@ const callGeminiImageModel = async ({ prompt, negativePrompt, apiKey }) => {
     throw await createApiError(response);
   }
 
-  return response.json();
+  const result = await response.json();
+  // Logamos a resposta para facilitar depuração de bloqueios ou ausências de inline_data.
+  console.info('[Imagen API] Resposta bruta do Gemini:', JSON.stringify(result));
+  return result;
 };
 
 const callLegacyImagenApi = async ({ endpoint, prompt, negativePrompt, apiKey }) => {
@@ -682,13 +801,17 @@ export default async function handler(request) {
   }
 
   try {
-    const primaryResult = await callGeminiImageModel({ prompt, negativePrompt, apiKey });
+    const primaryResult = await callLegacyImagenApi({
+      endpoint: LEGACY_FALLBACK_GENERATE_ENDPOINT,
+      prompt,
+      negativePrompt,
+      apiKey
+    });
 
-    const base64Image = await resolveBase64Image(primaryResult, { apiKey });
-
-    if (!base64Image) {
-      throw new Error('A resposta da Imagen API não contém imagem válida.');
-    }
+    const base64Image = await ensureBase64Image(primaryResult, {
+      apiKey,
+      modelName: LEGACY_FALLBACK_MODEL
+    });
 
     return new Response(JSON.stringify({ image: base64Image }), {
       status: 200,
@@ -704,18 +827,12 @@ export default async function handler(request) {
     }
 
     try {
-      const legacyResult = await callLegacyImagenApi({
-        endpoint: LEGACY_GENERATE_ENDPOINT,
-        prompt,
-        negativePrompt,
-        apiKey
+      const geminiResult = await callGeminiImageModel({ prompt, negativePrompt, apiKey });
+
+      const base64Image = await ensureBase64Image(geminiResult, {
+        apiKey,
+        modelName: GEMINI_IMAGE_MODEL
       });
-
-      const base64Image = await resolveBase64Image(legacyResult, { apiKey });
-
-      if (!base64Image) {
-        throw new Error('A resposta da Imagen API não contém imagem válida.');
-      }
 
       return new Response(JSON.stringify({ image: base64Image }), {
         status: 200,
@@ -725,29 +842,28 @@ export default async function handler(request) {
           'Access-Control-Allow-Origin': allowedOrigin
         }
       });
-    } catch (legacyError) {
-      if (!shouldRetryWithFallbackModel(legacyError)) {
-        legacyError.cause = primaryError || legacyError.cause;
+    } catch (geminiError) {
+      if (!shouldRetryWithFallbackModel(geminiError)) {
+        geminiError.cause = primaryError || geminiError.cause;
         return respondWithError(
-          legacyError,
-          legacyError.payload || primaryError.payload,
+          geminiError,
+          geminiError.payload || primaryError.payload,
           allowedOrigin
         );
       }
 
       try {
-        const fallbackResult = await callLegacyImagenApi({
-          endpoint: LEGACY_FALLBACK_GENERATE_ENDPOINT,
+        const legacyResult = await callLegacyImagenApi({
+          endpoint: LEGACY_GENERATE_ENDPOINT,
           prompt,
           negativePrompt,
           apiKey
         });
 
-        const base64Image = await resolveBase64Image(fallbackResult, { apiKey });
-
-        if (!base64Image) {
-          throw new Error('A resposta da Imagen API não contém imagem válida.');
-        }
+        const base64Image = await ensureBase64Image(legacyResult, {
+          apiKey,
+          modelName: 'imagegeneration'
+        });
 
         return new Response(JSON.stringify({ image: base64Image }), {
           status: 200,
@@ -757,10 +873,10 @@ export default async function handler(request) {
             'Access-Control-Allow-Origin': allowedOrigin
           }
         });
-      } catch (fallbackError) {
-        fallbackError.cause = primaryError || legacyError;
-        const details = fallbackError.payload || legacyError.payload || primaryError.payload;
-        return respondWithError(fallbackError, details, allowedOrigin);
+      } catch (legacyError) {
+        legacyError.cause = geminiError || primaryError;
+        const details = legacyError.payload || geminiError.payload || primaryError.payload;
+        return respondWithError(legacyError, details, allowedOrigin);
       }
     }
   }
