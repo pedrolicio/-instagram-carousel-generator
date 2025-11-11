@@ -1,6 +1,19 @@
 import { buildImagenPrompt, buildNegativePrompt } from '../utils/promptBuilder.js';
 
 const IMAGEN_PROXY_ENDPOINT = '/api/imagen';
+const GEMINI_IMAGE_ENDPOINT =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
+const LEGACY_GENERATE_ENDPOINT =
+  'https://generativelanguage.googleapis.com/v1beta/models/imagegeneration:generate';
+const LEGACY_FALLBACK_GENERATE_ENDPOINT =
+  'https://generativelanguage.googleapis.com/v1beta/models/imagegeneration@002:generate';
+
+const IMAGEN_CONFIG = {
+  aspectRatio: '4:5',
+  numberOfImages: 1,
+  safetyFilterLevel: 'block_some',
+  personGeneration: 'allow_adult'
+};
 const NETWORK_ERROR_MESSAGE =
   'Não foi possível se conectar à Imagen API. Verifique sua conexão com a internet, a chave de API e tente novamente.';
 
@@ -48,6 +61,216 @@ const callImagenProxy = async ({ prompt, negativePrompt, apiKey, signal }) => {
   return image;
 };
 
+const createImagenApiError = (message, status, payload) => {
+  const error = new Error(message || 'Falha ao gerar imagem com a Imagen API.');
+  if (status) error.status = status;
+  if (payload) error.payload = payload;
+  return error;
+};
+
+const callGeminiImageModel = async ({ prompt, negativePrompt, apiKey, signal }) => {
+  const payload = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: buildGeminiPromptText(prompt, negativePrompt) }]
+      }
+    ]
+  };
+
+  const requestUrl = new URL(GEMINI_IMAGE_ENDPOINT);
+  requestUrl.searchParams.set('key', apiKey);
+
+  const response = await fetch(requestUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey
+    },
+    body: JSON.stringify(payload),
+    signal
+  });
+
+  if (!response.ok) {
+    let errorPayload = null;
+    try {
+      errorPayload = await response.json();
+    } catch (error) {
+      errorPayload = null;
+    }
+
+    const message =
+      errorPayload?.error?.message || errorPayload?.message || 'Falha ao gerar imagem com a Imagen API.';
+    throw createImagenApiError(message, response.status, errorPayload);
+  }
+
+  const result = await response.json();
+  const base64Image = extractBase64Image(result);
+
+  if (!base64Image) {
+    throw createImagenApiError('A resposta da Imagen API não contém imagem válida.');
+  }
+
+  return base64Image;
+};
+
+const extractBase64Image = (payload) => {
+  if (!payload) return '';
+
+  const inlinePart = payload?.candidates?.[0]?.content?.parts?.find((part) => {
+    const base64 = part?.inlineData?.data;
+    return typeof base64 === 'string' && base64.length > 0;
+  });
+
+  if (inlinePart?.inlineData?.data) {
+    return inlinePart.inlineData.data;
+  }
+
+  const inlineCandidate = payload?.candidates?.[0]?.inlineData?.data;
+  if (typeof inlineCandidate === 'string' && inlineCandidate.length > 0) {
+    return inlineCandidate;
+  }
+
+  const candidates = [
+    payload?.predictions?.[0]?.bytesBase64Encoded,
+    payload?.predictions?.[0]?.base64Image,
+    payload?.images?.[0]?.base64,
+    payload?.images?.[0]?.content,
+    payload?.images?.[0]?.content?.base64,
+    payload?.artifacts?.[0]?.base64,
+    payload?.data?.[0]?.b64_json,
+    payload?.generatedImages?.[0]?.bytesBase64Encoded
+  ];
+
+  return candidates.find((candidate) => typeof candidate === 'string' && candidate.length > 0) || '';
+};
+
+const buildGeminiPromptText = (prompt, negativePrompt) => {
+  if (!negativePrompt) return prompt;
+
+  return `${prompt}\n\nRestrições: ${negativePrompt}`;
+};
+
+const shouldRetryWithFallbackModel = (error) => {
+  if (!error) return false;
+  if (error.status === 404 || error.status === 405) return true;
+  if (error.status && error.status >= 500) return true;
+
+  const message = (error.payload?.error?.message || error.message || '').toLowerCase();
+
+  return (
+    message.includes('legacy') ||
+    message.includes('predict') ||
+    message.includes('deprecated') ||
+    message.includes('not found') ||
+    message.includes('imagen-3.0') ||
+    message.includes('gemini-2.5') ||
+    message.includes('flash-image')
+  );
+};
+
+const callLegacyImagenEndpoint = async ({ endpoint, prompt, negativePrompt, apiKey, signal }) => {
+  const payload = {
+    prompt: { text: prompt },
+    imageGenerationConfig: {
+      numberOfImages: IMAGEN_CONFIG.numberOfImages,
+      aspectRatio: IMAGEN_CONFIG.aspectRatio,
+      outputMimeType: 'image/png',
+      safetyFilterLevel: IMAGEN_CONFIG.safetyFilterLevel,
+      personGeneration: IMAGEN_CONFIG.personGeneration
+    }
+  };
+
+  if (negativePrompt) {
+    payload.negativePrompt = { text: negativePrompt };
+  }
+
+  const requestUrl = new URL(endpoint);
+  requestUrl.searchParams.set('key', apiKey);
+
+  const response = await fetch(requestUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey
+    },
+    body: JSON.stringify(payload),
+    signal
+  });
+
+  if (!response.ok) {
+    let errorPayload = null;
+    try {
+      errorPayload = await response.json();
+    } catch (error) {
+      errorPayload = null;
+    }
+
+    const message = errorPayload?.error?.message || 'Falha ao gerar imagem com a Imagen API.';
+    throw createImagenApiError(message, response.status, errorPayload);
+  }
+
+  const result = await response.json();
+  const base64Image = extractBase64Image(result);
+
+  if (!base64Image) {
+    throw createImagenApiError('A resposta da Imagen API não contém imagem válida.');
+  }
+
+  return base64Image;
+};
+
+const callImagenApiDirectly = async ({ prompt, negativePrompt, apiKey, signal }) => {
+  let primaryError = null;
+
+  try {
+    return await callGeminiImageModel({ prompt, negativePrompt, apiKey, signal });
+  } catch (error) {
+    primaryError = error;
+    if (!shouldRetryWithFallbackModel(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    return await callLegacyImagenEndpoint({
+      endpoint: LEGACY_GENERATE_ENDPOINT,
+      prompt,
+      negativePrompt,
+      apiKey,
+      signal
+    });
+  } catch (legacyError) {
+    if (!shouldRetryWithFallbackModel(legacyError)) {
+      legacyError.cause = primaryError || legacyError.cause;
+      throw legacyError;
+    }
+
+    try {
+      return await callLegacyImagenEndpoint({
+        endpoint: LEGACY_FALLBACK_GENERATE_ENDPOINT,
+        prompt,
+        negativePrompt,
+        apiKey,
+        signal
+      });
+    } catch (fallbackError) {
+      fallbackError.cause = primaryError || legacyError;
+      throw fallbackError;
+    }
+  }
+};
+
+const shouldBypassProxy = (error) => {
+  if (!error) return false;
+
+  const status = error.status;
+  if (status === 404 || status === 405 || status === 501) return true;
+
+  const message = (error.message || '').toLowerCase();
+  return message.includes('not found') || message.includes('edge function');
+};
+
 export async function generateSlideImage({ prompt, negativePrompt, apiKey, signal }) {
   if (!apiKey) throw new Error('Configure a Google AI API Key antes de gerar imagens.');
 
@@ -61,6 +284,15 @@ export async function generateSlideImage({ prompt, negativePrompt, apiKey, signa
       signal
     });
   } catch (error) {
+    if (shouldBypassProxy(error)) {
+      return callImagenApiDirectly({
+        prompt,
+        negativePrompt: resolvedNegativePrompt,
+        apiKey,
+        signal
+      });
+    }
+
     if (error?.name === 'TypeError' || /network/i.test(error?.message || '')) {
       const enhancedError = new Error(NETWORK_ERROR_MESSAGE);
       enhancedError.cause = error;

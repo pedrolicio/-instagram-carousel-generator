@@ -2,9 +2,11 @@ export const config = {
   runtime: 'edge'
 };
 
-const GENERATE_ENDPOINT =
+const GEMINI_IMAGE_ENDPOINT =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
+const LEGACY_GENERATE_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/imagegeneration:generate';
-const FALLBACK_GENERATE_ENDPOINT =
+const LEGACY_FALLBACK_GENERATE_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/imagegeneration@002:generate';
 
 const IMAGEN_CONFIG = {
@@ -17,11 +19,25 @@ const IMAGEN_CONFIG = {
 const baseHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type'
+  'Access-Control-Allow-Headers': 'Content-Type,X-Goog-Api-Key'
 };
 
 const extractBase64Image = (payload) => {
   if (!payload) return '';
+
+  const inlinePart = payload?.candidates?.[0]?.content?.parts?.find((part) => {
+    const base64 = part?.inlineData?.data;
+    return typeof base64 === 'string' && base64.length > 0;
+  });
+
+  if (inlinePart?.inlineData?.data) {
+    return inlinePart.inlineData.data;
+  }
+
+  const inlineCandidate = payload?.candidates?.[0]?.inlineData?.data;
+  if (typeof inlineCandidate === 'string' && inlineCandidate.length > 0) {
+    return inlineCandidate;
+  }
 
   const candidates = [
     payload?.predictions?.[0]?.bytesBase64Encoded,
@@ -35,6 +51,12 @@ const extractBase64Image = (payload) => {
   ];
 
   return candidates.find((candidate) => typeof candidate === 'string' && candidate.length > 0) || '';
+};
+
+const buildGeminiPromptText = (prompt, negativePrompt) => {
+  if (!negativePrompt) return prompt;
+
+  return `${prompt}\n\nRestrições: ${negativePrompt}`;
 };
 
 const isNetworkError = (error) => {
@@ -56,7 +78,9 @@ const shouldRetryWithFallbackModel = (error) => {
     message.includes('predict') ||
     message.includes('deprecated') ||
     message.includes('not found') ||
-    message.includes('imagen-3.0')
+    message.includes('imagen-3.0') ||
+    message.includes('gemini-2.5') ||
+    message.includes('flash-image')
   );
 };
 
@@ -70,6 +94,10 @@ const getModelAvailabilityHelp = (error) => {
 
   const genericHelp =
     'Sua chave da Google AI não tem acesso ao modelo solicitado. Acesse o Google AI Studio, habilite o Image Generation para o projeto da chave ou gere uma nova chave com esse acesso.';
+
+  if (message.includes('gemini-2.5') || message.includes('flash-image')) {
+    return `${genericHelp} Garanta que o modelo "gemini-2.5-flash-image" esteja habilitado no projeto da chave.`;
+  }
 
   if (message.includes('imagen-3.0')) {
     return `${genericHelp} Garanta que o modelo "imagen-3.0-generate-001" esteja disponível para uso.`;
@@ -101,7 +129,36 @@ const createApiError = async (response) => {
   return apiError;
 };
 
-const callImagenApi = async ({ endpoint, prompt, negativePrompt, apiKey }) => {
+const callGeminiImageModel = async ({ prompt, negativePrompt, apiKey }) => {
+  const payload = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: buildGeminiPromptText(prompt, negativePrompt) }]
+      }
+    ]
+  };
+
+  const requestUrl = new URL(GEMINI_IMAGE_ENDPOINT);
+  requestUrl.searchParams.set('key', apiKey);
+
+  const response = await fetch(requestUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw await createApiError(response);
+  }
+
+  return response.json();
+};
+
+const callLegacyImagenApi = async ({ endpoint, prompt, negativePrompt, apiKey }) => {
   const payload = {
     prompt: { text: prompt },
     imageGenerationConfig: {
@@ -184,12 +241,7 @@ export default async function handler(request) {
   }
 
   try {
-    const primaryResult = await callImagenApi({
-      endpoint: GENERATE_ENDPOINT,
-      prompt,
-      negativePrompt,
-      apiKey
-    });
+    const primaryResult = await callGeminiImageModel({ prompt, negativePrompt, apiKey });
 
     const base64Image = extractBase64Image(primaryResult);
 
@@ -213,14 +265,14 @@ export default async function handler(request) {
     }
 
     try {
-      const fallbackResult = await callImagenApi({
-        endpoint: FALLBACK_GENERATE_ENDPOINT,
+      const legacyResult = await callLegacyImagenApi({
+        endpoint: LEGACY_GENERATE_ENDPOINT,
         prompt,
         negativePrompt,
         apiKey
       });
 
-      const base64Image = extractBase64Image(fallbackResult);
+      const base64Image = extractBase64Image(legacyResult);
 
       if (!base64Image) {
         throw new Error('A resposta da Imagen API não contém imagem válida.');
@@ -233,14 +285,47 @@ export default async function handler(request) {
           ...baseHeaders
         }
       });
-    } catch (fallbackError) {
-      const helpMessage = getModelAvailabilityHelp(fallbackError) || getModelAvailabilityHelp(primaryError);
+    } catch (legacyError) {
+      if (!shouldRetryWithFallbackModel(legacyError)) {
+        legacyError.cause = primaryError || legacyError.cause;
+        const helpMessage = getModelAvailabilityHelp(legacyError) || getModelAvailabilityHelp(primaryError);
+        const message = helpMessage || legacyError.message || 'Falha ao gerar imagem com a Imagen API.';
+        const details = legacyError.payload || primaryError.payload;
 
-      const message = helpMessage || fallbackError.message || 'Falha ao gerar imagem com a Imagen API.';
+        return buildErrorResponse(legacyError.status || 500, message, details);
+      }
 
-      const details = fallbackError.payload || primaryError.payload;
+      try {
+        const fallbackResult = await callLegacyImagenApi({
+          endpoint: LEGACY_FALLBACK_GENERATE_ENDPOINT,
+          prompt,
+          negativePrompt,
+          apiKey
+        });
 
-      return buildErrorResponse(fallbackError.status || 500, message, details);
+        const base64Image = extractBase64Image(fallbackResult);
+
+        if (!base64Image) {
+          throw new Error('A resposta da Imagen API não contém imagem válida.');
+        }
+
+        return new Response(JSON.stringify({ image: base64Image }), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            ...baseHeaders
+          }
+        });
+      } catch (fallbackError) {
+        fallbackError.cause = primaryError || legacyError;
+        const helpMessage = getModelAvailabilityHelp(fallbackError) || getModelAvailabilityHelp(legacyError) || getModelAvailabilityHelp(primaryError);
+
+        const message = helpMessage || fallbackError.message || 'Falha ao gerar imagem com a Imagen API.';
+
+        const details = fallbackError.payload || legacyError.payload || primaryError.payload;
+
+        return buildErrorResponse(fallbackError.status || 500, message, details);
+      }
     }
   }
 }
