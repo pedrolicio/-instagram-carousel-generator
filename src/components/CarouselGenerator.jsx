@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Loader2, Sparkles, Wand2 } from 'lucide-react';
-import { useAppContext } from '../context/AppContext.jsx';
+import { useAppContext, CAROUSEL_STORAGE_ERROR_MESSAGE } from '../context/AppContext.jsx';
 import { generateCarouselContent } from '../services/claudeService.js';
 import { ContentPreview } from './ContentPreview.jsx';
 import { ImageGenerator } from './ImageGenerator.jsx';
@@ -108,6 +108,21 @@ export const CarouselGenerator = ({ selectedClientId, onSelectClient }) => {
     }
 
     const now = new Date().toISOString();
+    const resolvedImages = images.length
+      ? images
+      : content.slides.map((slide) => ({ slideNumber: slide.slideNumber, imageUrl: null, status: 'pending' }));
+
+    const sanitizedImages = resolvedImages.map((image) => {
+      const rawUrl = typeof image.imageUrl === 'string' ? image.imageUrl : null;
+      const imageUrl = rawUrl && rawUrl.startsWith('data:') ? null : rawUrl;
+
+      return {
+        slideNumber: image.slideNumber,
+        status: image.status ?? (imageUrl ? 'generated' : 'pending'),
+        imageUrl: imageUrl ?? null
+      };
+    });
+
     const carousel = {
       id: uuidv4(),
       clientId: selectedClient.id,
@@ -124,13 +139,18 @@ export const CarouselGenerator = ({ selectedClientId, onSelectClient }) => {
             imagenPrompt: buildImagenPrompt(slide, selectedClient),
             negativePrompt: buildNegativePrompt()
           })),
-      images: images.length
-        ? images
-        : content.slides.map((slide) => ({ slideNumber: slide.slideNumber, imageUrl: null, status: 'pending' }))
+      images: sanitizedImages
     };
 
-    addCarousel(carousel);
-    setSuccessMessage('Carrossel salvo no histórico com sucesso!');
+    setError('');
+    setSuccessMessage('');
+    const wasSaved = addCarousel(carousel);
+
+    if (wasSaved) {
+      setSuccessMessage('Carrossel salvo no histórico com sucesso!');
+    } else {
+      setError(CAROUSEL_STORAGE_ERROR_MESSAGE);
+    }
   };
 
   return (
