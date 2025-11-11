@@ -19,6 +19,140 @@ const NETWORK_ERROR_MESSAGE =
 const QUOTA_ERROR_MESSAGE =
   'Limite de uso da Google AI API excedido. Revise seu plano de faturamento ou aguarde antes de tentar novamente.';
 
+const getRetryAfterSecondsFromDetails = (details) => {
+  if (!Array.isArray(details)) return null;
+
+  for (const detail of details) {
+    if (!detail || typeof detail !== 'object') continue;
+
+    const type = detail['@type'] || detail.type;
+    if (!type || typeof type !== 'string') continue;
+
+    if (!type.toLowerCase().includes('retryinfo')) continue;
+
+    const retryDelay = detail.retryDelay || detail.retry_delay;
+    if (!retryDelay || typeof retryDelay !== 'object') continue;
+
+    const seconds = Number(retryDelay.seconds || retryDelay.Seconds || 0);
+    const nanos = Number(retryDelay.nanos || retryDelay.Nanos || 0);
+
+    const total = seconds + nanos / 1_000_000_000;
+    if (Number.isFinite(total) && total > 0) {
+      return total;
+    }
+  }
+
+  return null;
+};
+
+const parseRetryAfterHeader = (response) => {
+  if (!response?.headers) return null;
+
+  const header = response.headers.get?.('retry-after');
+  if (!header) return null;
+
+  const numericValue = Number.parseFloat(header);
+  if (Number.isFinite(numericValue) && numericValue > 0) {
+    return numericValue;
+  }
+
+  const retryDate = new Date(header);
+  if (!Number.isNaN(retryDate.getTime())) {
+    const diffSeconds = (retryDate.getTime() - Date.now()) / 1000;
+    if (Number.isFinite(diffSeconds) && diffSeconds > 0) {
+      return diffSeconds;
+    }
+  }
+
+  return null;
+};
+
+const normalizeRetryAfterSeconds = (value) => {
+  if (value == null) return null;
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+
+  if (typeof value === 'string') {
+    const numeric = Number.parseFloat(value);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+  }
+
+  if (typeof value === 'object') {
+    const seconds = Number(value.seconds ?? value.Seconds ?? value.retryAfterSeconds ?? value.retry_after_seconds ?? 0);
+    const nanos = Number(value.nanos ?? value.Nanos ?? 0);
+    const total = seconds + nanos / 1_000_000_000;
+    return Number.isFinite(total) && total > 0 ? total : null;
+  }
+
+  return null;
+};
+
+const extractRetryAfterSeconds = (response, payload, message) => {
+  const headerRetry = parseRetryAfterHeader(response);
+  if (headerRetry) return headerRetry;
+
+  const directRetryCandidates = [
+    payload?.error?.retryAfterSeconds,
+    payload?.error?.retry_after_seconds,
+    payload?.error?.retryAfter,
+    payload?.error?.retry_after,
+    payload?.retryAfterSeconds,
+    payload?.retry_after_seconds
+  ];
+
+  for (const candidate of directRetryCandidates) {
+    const normalized = normalizeRetryAfterSeconds(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  const detailsRetry = getRetryAfterSecondsFromDetails(payload?.error?.details || payload?.details);
+  if (detailsRetry) return detailsRetry;
+
+  const sourceMessage = message || payload?.error?.message || payload?.message || '';
+  if (typeof sourceMessage === 'string' && sourceMessage) {
+    const match = sourceMessage.match(/retry in\s+(\d+(?:\.\d+)?)/i);
+    if (match) {
+      const seconds = Number.parseFloat(match[1]);
+      if (Number.isFinite(seconds) && seconds > 0) {
+        return seconds;
+      }
+    }
+  }
+
+  return null;
+};
+
+const resolveRetryAfterSeconds = (error) => {
+  const visited = new Set();
+  let current = error;
+
+  while (current && !visited.has(current)) {
+    visited.add(current);
+
+    if (Number.isFinite(current?.retryAfterSeconds) && current.retryAfterSeconds > 0) {
+      return current.retryAfterSeconds;
+    }
+
+    current = current.cause;
+  }
+
+  return null;
+};
+
+const formatRetryAfterMessage = (retryAfterSeconds) => {
+  if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+    return '';
+  }
+
+  const roundedSeconds = Math.max(1, Math.ceil(retryAfterSeconds));
+  const unit = roundedSeconds === 1 ? 'segundo' : 'segundos';
+  return ` Aguarde aproximadamente ${roundedSeconds} ${unit} e tente novamente.`;
+};
+
 const createApiError = async (response) => {
   const errorPayload = await response.json().catch(() => ({}));
   const message =
@@ -26,6 +160,10 @@ const createApiError = async (response) => {
   const error = new Error(message);
   error.status = response.status;
   error.payload = errorPayload;
+  const retryAfterSeconds = extractRetryAfterSeconds(null, errorPayload, message);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    error.retryAfterSeconds = retryAfterSeconds;
+  }
   return error;
 };
 
@@ -52,6 +190,9 @@ const callImagenProxy = async ({ prompt, negativePrompt, apiKey, signal }) => {
   if (payload.error) {
     const proxyError = new Error(payload.error?.message || 'Falha ao gerar imagem com a Imagen API.');
     proxyError.payload = payload.error?.details;
+    if (Number.isFinite(payload.error?.retryAfterSeconds) && payload.error.retryAfterSeconds > 0) {
+      proxyError.retryAfterSeconds = payload.error.retryAfterSeconds;
+    }
     throw proxyError;
   }
 
@@ -63,10 +204,13 @@ const callImagenProxy = async ({ prompt, negativePrompt, apiKey, signal }) => {
   return image;
 };
 
-const createImagenApiError = (message, status, payload) => {
+const createImagenApiError = (message, status, payload, retryAfterSeconds) => {
   const error = new Error(message || 'Falha ao gerar imagem com a Imagen API.');
   if (status) error.status = status;
   if (payload) error.payload = payload;
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    error.retryAfterSeconds = retryAfterSeconds;
+  }
   return error;
 };
 
@@ -103,7 +247,8 @@ const callGeminiImageModel = async ({ prompt, negativePrompt, apiKey, signal }) 
 
     const message =
       errorPayload?.error?.message || errorPayload?.message || 'Falha ao gerar imagem com a Imagen API.';
-    throw createImagenApiError(message, response.status, errorPayload);
+    const retryAfterSeconds = extractRetryAfterSeconds(response, errorPayload, message);
+    throw createImagenApiError(message, response.status, errorPayload, retryAfterSeconds);
   }
 
   const result = await response.json();
@@ -209,7 +354,8 @@ const callLegacyImagenEndpoint = async ({ endpoint, prompt, negativePrompt, apiK
     }
 
     const message = errorPayload?.error?.message || 'Falha ao gerar imagem com a Imagen API.';
-    throw createImagenApiError(message, response.status, errorPayload);
+    const retryAfterSeconds = extractRetryAfterSeconds(response, errorPayload, message);
+    throw createImagenApiError(message, response.status, errorPayload, retryAfterSeconds);
   }
 
   const result = await response.json();
@@ -297,10 +443,15 @@ const isQuotaExceededError = (error) => {
 };
 
 const createQuotaExceededError = (error) => {
-  const quotaError = new Error(QUOTA_ERROR_MESSAGE);
+  const retryAfterSeconds = resolveRetryAfterSeconds(error);
+  const retryMessage = formatRetryAfterMessage(retryAfterSeconds);
+  const quotaError = new Error(`${QUOTA_ERROR_MESSAGE}${retryMessage}`);
   quotaError.cause = error;
   quotaError.status = error?.status || 429;
   quotaError.payload = error?.payload;
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    quotaError.retryAfterSeconds = retryAfterSeconds;
+  }
   return quotaError;
 };
 
