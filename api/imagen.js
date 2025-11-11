@@ -27,7 +27,21 @@ const baseHeaders = {
 const extractBase64Image = (payload) => {
   if (!payload) return '';
 
-  const inlinePart = payload?.candidates?.[0]?.content?.parts?.find((part) => {
+  const candidate = payload?.candidates?.[0];
+
+  const contentParts = [];
+
+  if (Array.isArray(candidate?.content)) {
+    for (const content of candidate.content) {
+      if (Array.isArray(content?.parts)) {
+        contentParts.push(...content.parts);
+      }
+    }
+  } else if (Array.isArray(candidate?.content?.parts)) {
+    contentParts.push(...candidate.content.parts);
+  }
+
+  const inlinePart = contentParts.find((part) => {
     const base64 = part?.inlineData?.data;
     return typeof base64 === 'string' && base64.length > 0;
   });
@@ -36,7 +50,7 @@ const extractBase64Image = (payload) => {
     return inlinePart.inlineData.data;
   }
 
-  const inlineCandidate = payload?.candidates?.[0]?.inlineData?.data;
+  const inlineCandidate = candidate?.inlineData?.data;
   if (typeof inlineCandidate === 'string' && inlineCandidate.length > 0) {
     return inlineCandidate;
   }
