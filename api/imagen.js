@@ -71,17 +71,27 @@ const extractBase64Image = (payload) => {
   const contentParts = collectCandidateContentParts(payload);
 
   const inlinePart = contentParts.find((part) => {
-    const base64 = part?.inlineData?.data;
+    const inlineData = part?.inlineData || part?.inline_data || part?.inline_data?.data;
+    const base64 = inlineData?.data || inlineData?.base64 || inlineData?.b64 || inlineData;
     return typeof base64 === 'string' && base64.length > 0;
   });
 
-  if (inlinePart?.inlineData?.data) {
-    return inlinePart.inlineData.data;
+  if (inlinePart) {
+    const inlineData = inlinePart.inlineData || inlinePart.inline_data;
+    const base64 = inlineData?.data || inlineData?.base64 || inlineData?.b64 || inlineData;
+    if (typeof base64 === 'string' && base64.length > 0) {
+      return base64;
+    }
   }
 
   const inlineCandidate = payload?.candidates?.[0]?.inlineData?.data;
   if (typeof inlineCandidate === 'string' && inlineCandidate.length > 0) {
     return inlineCandidate;
+  }
+
+  const snakeInlineCandidate = payload?.candidates?.[0]?.inline_data?.data;
+  if (typeof snakeInlineCandidate === 'string' && snakeInlineCandidate.length > 0) {
+    return snakeInlineCandidate;
   }
 
   const candidates = [
@@ -92,7 +102,11 @@ const extractBase64Image = (payload) => {
     payload?.images?.[0]?.content?.base64,
     payload?.artifacts?.[0]?.base64,
     payload?.data?.[0]?.b64_json,
-    payload?.generatedImages?.[0]?.bytesBase64Encoded
+    payload?.generatedImages?.[0]?.bytesBase64Encoded,
+    payload?.generatedImages?.[0]?.base64,
+    payload?.generatedImages?.[0]?.imageBase64,
+    payload?.image?.base64,
+    payload?.image?.bytesBase64Encoded
   ];
 
   return candidates.find((candidate) => typeof candidate === 'string' && candidate.length > 0) || '';
@@ -104,9 +118,15 @@ const extractFileUri = (payload) => {
   const contentParts = collectCandidateContentParts(payload);
 
   for (const part of contentParts) {
-    const fileData = part?.fileData || part?.media;
+    const fileData = part?.fileData || part?.file_data || part?.media || part?.mediaData || part?.media_data;
     const fileUri =
-      fileData?.fileUri || fileData?.file_uri || fileData?.uri || fileData?.source || fileData?.downloadUri;
+      fileData?.fileUri ||
+      fileData?.file_uri ||
+      fileData?.uri ||
+      fileData?.source ||
+      fileData?.downloadUri ||
+      fileData?.download_uri ||
+      fileData?.url;
     if (typeof fileUri === 'string' && fileUri.length > 0) {
       return fileUri;
     }
@@ -114,10 +134,17 @@ const extractFileUri = (payload) => {
 
   const fallbackUris = [
     payload?.candidates?.[0]?.fileData?.fileUri,
+    payload?.candidates?.[0]?.file_data?.fileUri,
+    payload?.candidates?.[0]?.file_data?.file_uri,
     payload?.files?.[0]?.uri,
     payload?.files?.[0]?.fileUri,
+    payload?.files?.[0]?.downloadUri,
+    payload?.files?.[0]?.download_uri,
     payload?.generatedImages?.[0]?.fileUri,
-    payload?.generatedImages?.[0]?.uri
+    payload?.generatedImages?.[0]?.file_uri,
+    payload?.generatedImages?.[0]?.uri,
+    payload?.generatedImages?.[0]?.downloadUri,
+    payload?.generatedImages?.[0]?.download_uri
   ];
 
   return fallbackUris.find((candidate) => typeof candidate === 'string' && candidate.length > 0) || '';
