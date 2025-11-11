@@ -421,10 +421,7 @@ const callGeminiImageModel = async ({ prompt, negativePrompt, apiKey }) => {
         role: 'user',
         parts: [{ text: buildGeminiPromptText(prompt, negativePrompt) }]
       }
-    ],
-    generationConfig: {
-      responseMimeType: 'image/png'
-    }
+    ]
   };
 
   const requestUrl = new URL(GEMINI_IMAGE_ENDPOINT);
