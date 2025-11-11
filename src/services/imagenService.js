@@ -16,6 +16,8 @@ const IMAGEN_CONFIG = {
 };
 const NETWORK_ERROR_MESSAGE =
   'Não foi possível se conectar à Imagen API. Verifique sua conexão com a internet, a chave de API e tente novamente.';
+const QUOTA_ERROR_MESSAGE =
+  'Limite de uso da Google AI API excedido. Revise seu plano de faturamento ou aguarde antes de tentar novamente.';
 
 const createApiError = async (response) => {
   const errorPayload = await response.json().catch(() => ({}));
@@ -271,6 +273,37 @@ const shouldBypassProxy = (error) => {
   return message.includes('not found') || message.includes('edge function');
 };
 
+const isQuotaExceededError = (error) => {
+  if (!error) return false;
+
+  if (error.status === 429) return true;
+
+  const payloadError = error.payload?.error || error.payload;
+  const payloadStatus = payloadError?.status;
+  const payloadCode = payloadError?.code;
+
+  if (payloadCode === 429 || payloadStatus === 429 || payloadStatus === 'RESOURCE_EXHAUSTED') {
+    return true;
+  }
+
+  const message = (payloadError?.message || error.message || '').toLowerCase();
+
+  return (
+    message.includes('quota') ||
+    message.includes('rate limit') ||
+    message.includes('exceeded your current quota') ||
+    message.includes('resource exhausted')
+  );
+};
+
+const createQuotaExceededError = (error) => {
+  const quotaError = new Error(QUOTA_ERROR_MESSAGE);
+  quotaError.cause = error;
+  quotaError.status = error?.status || 429;
+  quotaError.payload = error?.payload;
+  return quotaError;
+};
+
 export async function generateSlideImage({ prompt, negativePrompt, apiKey, signal }) {
   if (!apiKey) throw new Error('Configure a Google AI API Key antes de gerar imagens.');
 
@@ -285,12 +318,23 @@ export async function generateSlideImage({ prompt, negativePrompt, apiKey, signa
     });
   } catch (error) {
     if (shouldBypassProxy(error)) {
-      return callImagenApiDirectly({
-        prompt,
-        negativePrompt: resolvedNegativePrompt,
-        apiKey,
-        signal
-      });
+      try {
+        return await callImagenApiDirectly({
+          prompt,
+          negativePrompt: resolvedNegativePrompt,
+          apiKey,
+          signal
+        });
+      } catch (directError) {
+        if (isQuotaExceededError(directError)) {
+          throw createQuotaExceededError(directError);
+        }
+        throw directError;
+      }
+    }
+
+    if (isQuotaExceededError(error)) {
+      throw createQuotaExceededError(error);
     }
 
     if (error?.name === 'TypeError' || /network/i.test(error?.message || '')) {
