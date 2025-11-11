@@ -179,24 +179,48 @@ const fetchFileUriAsBase64 = async (fileUri, apiKey) => {
     // Ignore invalid URL parsing errors and use the raw uri.
   }
 
+  let response;
+
   try {
-    const response = await fetch(downloadUrl, {
+    response = await fetch(downloadUrl, {
       headers: apiKey
         ? {
             'X-Goog-Api-Key': apiKey
           }
         : undefined
     });
+  } catch (networkError) {
+    const error = new Error('Falha ao baixar a imagem gerada pela Imagen API.');
+    error.cause = networkError;
+    throw error;
+  }
 
-    if (!response.ok) {
-      return '';
+  if (!response.ok) {
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (parseError) {
+      payload = null;
     }
 
-    const buffer = await response.arrayBuffer();
-    return arrayBufferToBase64(buffer);
-  } catch (error) {
-    return '';
+    const message =
+      payload?.error?.message ||
+      payload?.message ||
+      `Falha ao baixar a imagem gerada pela Imagen API (HTTP ${response.status}).`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
   }
+
+  const buffer = await response.arrayBuffer();
+  if (!buffer || buffer.byteLength === 0) {
+    const error = new Error('A imagem retornada pela Imagen API está vazia.');
+    error.status = 502;
+    throw error;
+  }
+
+  return arrayBufferToBase64(buffer);
 };
 
 const resolveBase64Image = async (payload, { apiKey } = {}) => {
@@ -584,12 +608,15 @@ export default async function handler(request) {
     return buildErrorResponse(400, 'Corpo da requisição inválido.', { allowedOrigin });
   }
 
-  const { prompt, negativePrompt } = body || {};
+  const { prompt, negativePrompt, apiKey: providedApiKey } = body || {};
 
-  const apiKey = process.env.GOOGLE_API_KEY;
+  const trimmedApiKey = typeof providedApiKey === 'string' ? providedApiKey.trim() : '';
+  const apiKey = trimmedApiKey || process.env.GOOGLE_API_KEY;
 
   if (!apiKey) {
-    return buildErrorResponse(500, 'A API Key não está configurada no servidor.', { allowedOrigin });
+    return buildErrorResponse(500, 'A API Key não foi fornecida ou configurada no servidor.', {
+      allowedOrigin
+    });
   }
 
   if (!prompt || typeof prompt !== 'string') {
