@@ -24,22 +24,51 @@ const baseHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type,X-Goog-Api-Key'
 };
 
+const collectCandidateContentParts = (payload) => {
+  const parts = [];
+  if (!payload) return parts;
+
+  const candidates = Array.isArray(payload?.candidates)
+    ? payload.candidates
+    : payload?.candidates
+      ? [payload.candidates]
+      : [];
+
+  const pushParts = (container) => {
+    if (!container) return;
+    if (Array.isArray(container?.parts)) {
+      parts.push(...container.parts);
+    }
+  };
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+
+    if (Array.isArray(candidate?.parts)) {
+      parts.push(...candidate.parts);
+    }
+
+    const candidateContent = candidate?.content;
+    if (Array.isArray(candidateContent)) {
+      for (const content of candidateContent) {
+        pushParts(content);
+      }
+    } else {
+      pushParts(candidateContent);
+    }
+  }
+
+  if (Array.isArray(payload?.content?.parts)) {
+    parts.push(...payload.content.parts);
+  }
+
+  return parts;
+};
+
 const extractBase64Image = (payload) => {
   if (!payload) return '';
 
-  const candidate = payload?.candidates?.[0];
-
-  const contentParts = [];
-
-  if (Array.isArray(candidate?.content)) {
-    for (const content of candidate.content) {
-      if (Array.isArray(content?.parts)) {
-        contentParts.push(...content.parts);
-      }
-    }
-  } else if (Array.isArray(candidate?.content?.parts)) {
-    contentParts.push(...candidate.content.parts);
-  }
+  const contentParts = collectCandidateContentParts(payload);
 
   const inlinePart = contentParts.find((part) => {
     const base64 = part?.inlineData?.data;
@@ -50,7 +79,7 @@ const extractBase64Image = (payload) => {
     return inlinePart.inlineData.data;
   }
 
-  const inlineCandidate = candidate?.inlineData?.data;
+  const inlineCandidate = payload?.candidates?.[0]?.inlineData?.data;
   if (typeof inlineCandidate === 'string' && inlineCandidate.length > 0) {
     return inlineCandidate;
   }
@@ -67,6 +96,95 @@ const extractBase64Image = (payload) => {
   ];
 
   return candidates.find((candidate) => typeof candidate === 'string' && candidate.length > 0) || '';
+};
+
+const extractFileUri = (payload) => {
+  if (!payload) return '';
+
+  const contentParts = collectCandidateContentParts(payload);
+
+  for (const part of contentParts) {
+    const fileData = part?.fileData || part?.media;
+    const fileUri =
+      fileData?.fileUri || fileData?.file_uri || fileData?.uri || fileData?.source || fileData?.downloadUri;
+    if (typeof fileUri === 'string' && fileUri.length > 0) {
+      return fileUri;
+    }
+  }
+
+  const fallbackUris = [
+    payload?.candidates?.[0]?.fileData?.fileUri,
+    payload?.files?.[0]?.uri,
+    payload?.files?.[0]?.fileUri,
+    payload?.generatedImages?.[0]?.fileUri,
+    payload?.generatedImages?.[0]?.uri
+  ];
+
+  return fallbackUris.find((candidate) => typeof candidate === 'string' && candidate.length > 0) || '';
+};
+
+const arrayBufferToBase64 = (buffer) => {
+  const bytes = new Uint8Array(buffer || 0);
+  if (!bytes.length) return '';
+
+  const chunkSize = 0x8000;
+  let binary = '';
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+};
+
+const fetchFileUriAsBase64 = async (fileUri, apiKey) => {
+  if (!fileUri) return '';
+
+  let downloadUrl = fileUri;
+
+  try {
+    const url = new URL(fileUri);
+    if (apiKey && !url.searchParams.has('key')) {
+      url.searchParams.set('key', apiKey);
+    }
+    downloadUrl = url.toString();
+  } catch (error) {
+    // Ignore invalid URL parsing errors and use the raw uri.
+  }
+
+  try {
+    const response = await fetch(downloadUrl, {
+      headers: apiKey
+        ? {
+            'X-Goog-Api-Key': apiKey
+          }
+        : undefined
+    });
+
+    if (!response.ok) {
+      return '';
+    }
+
+    const buffer = await response.arrayBuffer();
+    return arrayBufferToBase64(buffer);
+  } catch (error) {
+    return '';
+  }
+};
+
+const resolveBase64Image = async (payload, { apiKey } = {}) => {
+  const inlineImage = extractBase64Image(payload);
+  if (inlineImage) {
+    return inlineImage;
+  }
+
+  const fileUri = extractFileUri(payload);
+  if (!fileUri) {
+    return '';
+  }
+
+  return fetchFileUriAsBase64(fileUri, apiKey);
 };
 
 const buildGeminiPromptText = (prompt, negativePrompt) => {
@@ -303,7 +421,10 @@ const callGeminiImageModel = async ({ prompt, negativePrompt, apiKey }) => {
         role: 'user',
         parts: [{ text: buildGeminiPromptText(prompt, negativePrompt) }]
       }
-    ]
+    ],
+    generationConfig: {
+      responseMimeType: 'image/png'
+    }
   };
 
   const requestUrl = new URL(GEMINI_IMAGE_ENDPOINT);
@@ -439,7 +560,7 @@ export default async function handler(request) {
   try {
     const primaryResult = await callGeminiImageModel({ prompt, negativePrompt, apiKey });
 
-    const base64Image = extractBase64Image(primaryResult);
+    const base64Image = await resolveBase64Image(primaryResult, { apiKey });
 
     if (!base64Image) {
       throw new Error('A resposta da Imagen API não contém imagem válida.');
@@ -465,7 +586,7 @@ export default async function handler(request) {
         apiKey
       });
 
-      const base64Image = extractBase64Image(legacyResult);
+      const base64Image = await resolveBase64Image(legacyResult, { apiKey });
 
       if (!base64Image) {
         throw new Error('A resposta da Imagen API não contém imagem válida.');
@@ -492,7 +613,7 @@ export default async function handler(request) {
           apiKey
         });
 
-        const base64Image = extractBase64Image(fallbackResult);
+        const base64Image = await resolveBase64Image(fallbackResult, { apiKey });
 
         if (!base64Image) {
           throw new Error('A resposta da Imagen API não contém imagem válida.');
