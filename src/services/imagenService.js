@@ -7,8 +7,6 @@ const IMAGEN_CONFIG = {
   personGeneration: 'allow_adult'
 };
 
-const IMAGEN_MODEL = 'models/imagegeneration';
-const FALLBACK_IMAGEN_MODEL = 'models/imagegeneration@002';
 const GENERATE_IMAGES_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/imagegeneration:generate';
 const FALLBACK_GENERATE_ENDPOINT =
@@ -60,7 +58,8 @@ const shouldRetryWithFallbackModel = (error) => {
     message.includes('legacy') ||
     message.includes('predict') ||
     message.includes('deprecated') ||
-    message.includes('not found')
+    message.includes('not found') ||
+    message.includes('imagen-3.0')
   );
 };
 
@@ -80,7 +79,6 @@ const formatNetworkError = (error, fallbackMessage) => {
 
 const callFallbackGenerate = async ({ prompt, negativePrompt, apiKey, signal }) => {
   const payload = {
-    model: FALLBACK_IMAGEN_MODEL,
     prompt: { text: prompt },
     imageGenerationConfig: {
       numberOfImages: IMAGEN_CONFIG.numberOfImages,
@@ -95,7 +93,10 @@ const callFallbackGenerate = async ({ prompt, negativePrompt, apiKey, signal }) 
     payload.negativePrompt = { text: negativePrompt };
   }
 
-  const response = await fetch(`${FALLBACK_GENERATE_ENDPOINT}?key=${apiKey}`, {
+  const requestUrl = new URL(FALLBACK_GENERATE_ENDPOINT);
+  requestUrl.searchParams.set('key', apiKey);
+
+  const response = await fetch(requestUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -111,7 +112,6 @@ const callFallbackGenerate = async ({ prompt, negativePrompt, apiKey, signal }) 
 
 const callGenerateImages = async ({ prompt, negativePrompt, apiKey, signal }) => {
   const payload = {
-    model: IMAGEN_MODEL,
     prompt: { text: prompt },
     imageGenerationConfig: {
       numberOfImages: IMAGEN_CONFIG.numberOfImages,
@@ -126,7 +126,10 @@ const callGenerateImages = async ({ prompt, negativePrompt, apiKey, signal }) =>
     payload.negativePrompt = { text: negativePrompt };
   }
 
-  const response = await fetch(`${GENERATE_IMAGES_ENDPOINT}?key=${apiKey}`, {
+  const requestUrl = new URL(GENERATE_IMAGES_ENDPOINT);
+  requestUrl.searchParams.set('key', apiKey);
+
+  const response = await fetch(requestUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
