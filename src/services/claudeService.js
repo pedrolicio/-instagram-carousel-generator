@@ -6,6 +6,22 @@ const CLAUDE_CONFIG = {
   temperature: 0.7
 };
 
+const isNetworkError = (error) => {
+  if (!error) return false;
+  if (error.name === 'TypeError' && /fetch/i.test(error.message || '')) return true;
+  return /network/i.test(error.message || '');
+};
+
+const formatNetworkError = (error) => {
+  if (!isNetworkError(error)) return error;
+
+  const enhanced = new Error(
+    'Não foi possível se conectar à Claude API. Verifique sua conexão com a internet, a chave de API e tente novamente.'
+  );
+  enhanced.cause = error;
+  return enhanced;
+};
+
 export async function generateCarouselContent({ theme, brandKit, apiKey, signal }) {
   if (!theme) {
     throw new Error('Informe um tema para gerar o carrossel.');
@@ -17,26 +33,31 @@ export async function generateCarouselContent({ theme, brandKit, apiKey, signal 
 
   const prompt = buildClaudePrompt(theme, brandKit);
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: CLAUDE_CONFIG.model,
-      max_tokens: CLAUDE_CONFIG.max_tokens,
-      temperature: CLAUDE_CONFIG.temperature,
-      messages: [
-        {
-          role: 'user',
-          content: prompt
-        }
-      ]
-    }),
-    signal
-  });
+  let response;
+  try {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: CLAUDE_CONFIG.model,
+        max_tokens: CLAUDE_CONFIG.max_tokens,
+        temperature: CLAUDE_CONFIG.temperature,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      }),
+      signal
+    });
+  } catch (error) {
+    throw formatNetworkError(error);
+  }
 
   if (!response.ok) {
     const errorPayload = await response.json().catch(() => ({}));
