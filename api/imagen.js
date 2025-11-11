@@ -27,38 +27,96 @@ const collectCandidateContentParts = (payload) => {
   const parts = [];
   if (!payload) return parts;
 
-  const candidates = Array.isArray(payload?.candidates)
-    ? payload.candidates
-    : payload?.candidates
-      ? [payload.candidates]
-      : [];
+  const seen = new Set();
+  const queue = [];
+
+  const enqueue = (value) => {
+    if (!value || typeof value !== 'object') {
+      return;
+    }
+
+    if (seen.has(value)) {
+      return;
+    }
+
+    seen.add(value);
+    queue.push(value);
+  };
 
   const pushParts = (container) => {
-    if (!container) return;
-    if (Array.isArray(container?.parts)) {
+    if (!container || typeof container !== 'object') {
+      return;
+    }
+
+    if (Array.isArray(container.parts)) {
       parts.push(...container.parts);
     }
   };
 
-  for (const candidate of candidates) {
-    if (!candidate) continue;
+  enqueue(payload);
 
-    if (Array.isArray(candidate?.parts)) {
-      parts.push(...candidate.parts);
-    }
+  while (queue.length > 0) {
+    const current = queue.shift();
 
-    const candidateContent = candidate?.content;
-    if (Array.isArray(candidateContent)) {
-      for (const content of candidateContent) {
-        pushParts(content);
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        if (!item || typeof item !== 'object') {
+          continue;
+        }
+        pushParts(item);
+        enqueue(item);
       }
-    } else {
-      pushParts(candidateContent);
+      continue;
     }
-  }
 
-  if (Array.isArray(payload?.content?.parts)) {
-    parts.push(...payload.content.parts);
+    pushParts(current);
+
+    const nestedContainers = [
+      current.candidates,
+      current.candidate,
+      current.content,
+      current.contents,
+      current.data,
+      current.details,
+      current.files,
+      current.generatedContent,
+      current.generated_content,
+      current.generatedImages,
+      current.generated_images,
+      current.images,
+      current.items,
+      current.media,
+      current.mediaData,
+      current.media_data,
+      current.modelOutputs,
+      current.model_outputs,
+      current.modelOutput,
+      current.model_output,
+      current.output,
+      current.outputs,
+      current.predictions,
+      current.promptFeedback,
+      current.reply,
+      current.replies,
+      current.response,
+      current.responses,
+      current.result,
+      current.results,
+      current.text,
+      current.values
+    ];
+
+    for (const container of nestedContainers) {
+      if (!container) {
+        continue;
+      }
+
+      if (Array.isArray(container)) {
+        enqueue(container);
+      } else if (typeof container === 'object') {
+        enqueue(container);
+      }
+    }
   }
 
   return parts;
