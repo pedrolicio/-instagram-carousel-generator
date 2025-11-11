@@ -181,6 +181,30 @@ const decryptWithSecret = async (secret, payload) => {
 export const getClientsFromStorage = () => readStorage(STORAGE_KEYS.clients, []);
 export const saveClientsToStorage = (clients) => writeStorage(STORAGE_KEYS.clients, clients);
 
+const BASE64_IMAGE_MIN_LENGTH = 512;
+const BASE64_IMAGE_REGEX = /^[A-Za-z0-9+/=\s]+$/;
+
+const isLikelyBase64Image = (value) => {
+  if (typeof value !== 'string' || !value) {
+    return false;
+  }
+
+  if (value.startsWith('http') || value.startsWith('blob:')) {
+    return false;
+  }
+
+  if (value.startsWith('data:')) {
+    return true;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length < BASE64_IMAGE_MIN_LENGTH) {
+    return false;
+  }
+
+  return BASE64_IMAGE_REGEX.test(trimmed);
+};
+
 const sanitizeCarouselImage = (image) => {
   if (!image || typeof image !== 'object') {
     return {
@@ -191,7 +215,7 @@ const sanitizeCarouselImage = (image) => {
   }
 
   const rawUrl = typeof image.imageUrl === 'string' ? image.imageUrl : null;
-  const imageUrl = rawUrl && rawUrl.startsWith('data:') ? null : rawUrl;
+  const imageUrl = isLikelyBase64Image(rawUrl) ? null : rawUrl;
 
   return {
     slideNumber: image.slideNumber,
