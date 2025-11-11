@@ -261,6 +261,26 @@ const callGeminiImageModel = async ({ prompt, negativePrompt, apiKey, signal }) 
   return base64Image;
 };
 
+const extractInlineDataBase64 = (part) => {
+  if (!part || typeof part !== 'object') {
+    return '';
+  }
+
+  const inlineData = part.inlineData || part.inline_data;
+  if (!inlineData || typeof inlineData !== 'object') {
+    return '';
+  }
+
+  const base64Candidates = [
+    inlineData.data,
+    inlineData.base64,
+    inlineData.base64Data,
+    inlineData.base64_data
+  ];
+
+  return base64Candidates.find((value) => typeof value === 'string' && value.length > 0) || '';
+};
+
 const extractBase64Image = (payload) => {
   if (!payload) return '';
 
@@ -278,17 +298,17 @@ const extractBase64Image = (payload) => {
     contentParts.push(...candidate.content.parts);
   }
 
-  const inlinePart = contentParts.find((part) => {
-    const base64 = part?.inlineData?.data;
-    return typeof base64 === 'string' && base64.length > 0;
-  });
+  const inlinePart = contentParts.find((part) => extractInlineDataBase64(part));
 
-  if (inlinePart?.inlineData?.data) {
-    return inlinePart.inlineData.data;
+  if (inlinePart) {
+    const base64 = extractInlineDataBase64(inlinePart);
+    if (base64) {
+      return base64;
+    }
   }
 
-  const inlineCandidate = candidate?.inlineData?.data;
-  if (typeof inlineCandidate === 'string' && inlineCandidate.length > 0) {
+  const inlineCandidate = extractInlineDataBase64(candidate);
+  if (inlineCandidate) {
     return inlineCandidate;
   }
 
@@ -298,6 +318,8 @@ const extractBase64Image = (payload) => {
     payload?.images?.[0]?.base64,
     payload?.images?.[0]?.content,
     payload?.images?.[0]?.content?.base64,
+    payload?.images?.[0]?.parts?.[0]?.inlineData?.data,
+    payload?.images?.[0]?.parts?.[0]?.inline_data?.data,
     payload?.artifacts?.[0]?.base64,
     payload?.data?.[0]?.b64_json,
     payload?.generatedImages?.[0]?.bytesBase64Encoded

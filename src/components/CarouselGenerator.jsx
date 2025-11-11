@@ -4,6 +4,7 @@ import { useAppContext, CAROUSEL_STORAGE_ERROR_MESSAGE } from '../context/AppCon
 import { generateCarouselContent } from '../services/claudeService.js';
 import { ContentPreview } from './ContentPreview.jsx';
 import { ImageGenerator } from './ImageGenerator.jsx';
+import { GeneratedImagesPreview } from './GeneratedImagesPreview.jsx';
 import { v4 as uuidv4 } from 'uuid';
 import { buildImagenPrompt, buildNegativePrompt } from '../utils/promptBuilder.js';
 
@@ -219,6 +220,8 @@ export const CarouselGenerator = ({ selectedClientId, onSelectClient }) => {
             apiKey={apiKeys.google}
             onImagesGenerated={handleImagesGenerated}
           />
+
+          <GeneratedImagesPreview images={images} slides={content.slides} />
 
           <button
             type="button"
