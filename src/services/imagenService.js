@@ -1,6 +1,9 @@
 import { buildImagenPrompt, buildNegativePrompt } from '../utils/promptBuilder.js';
 
 const IMAGEN_PROXY_ENDPOINT = '/api/imagen';
+const IMAGEN_NANO_MODEL = 'imagen-3.0-nano-banana';
+const IMAGEN_NANO_ENDPOINT =
+  `https://generativelanguage.googleapis.com/v1beta/models/${IMAGEN_NANO_MODEL}:generateContent`;
 const GEMINI_IMAGE_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
 const LEGACY_GENERATE_ENDPOINT =
@@ -214,7 +217,54 @@ const createImagenApiError = (message, status, payload, retryAfterSeconds) => {
   return error;
 };
 
-const callGeminiImageModel = async ({ prompt, negativePrompt, apiKey, signal }) => {
+const callImagenNanoModel = async ({ prompt, negativePrompt, apiKey, signal }) => {
+  const payload = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: buildGeminiPromptText(prompt, negativePrompt) }]
+      }
+    ]
+  };
+
+  const requestUrl = new URL(IMAGEN_NANO_ENDPOINT);
+  requestUrl.searchParams.set('key', apiKey);
+
+  const response = await fetch(requestUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey
+    },
+    body: JSON.stringify(payload),
+    signal
+  });
+
+  if (!response.ok) {
+    let errorPayload = null;
+    try {
+      errorPayload = await response.json();
+    } catch (error) {
+      errorPayload = null;
+    }
+
+    const message =
+      errorPayload?.error?.message || errorPayload?.message || 'Falha ao gerar imagem com o modelo Imagen 3.0 Nano.';
+    const retryAfterSeconds = extractRetryAfterSeconds(response, errorPayload, message);
+    throw createImagenApiError(message, response.status, errorPayload, retryAfterSeconds);
+  }
+
+  const result = await response.json();
+  const base64Image = extractBase64Image(result);
+
+  if (!base64Image) {
+    throw createImagenApiError('O modelo Imagen 3.0 Nano não retornou uma imagem válida.');
+  }
+
+  return base64Image;
+};
+
+const callGeminiFlashImageModel = async ({ prompt, negativePrompt, apiKey, signal }) => {
   const payload = {
     contents: [
       {
@@ -245,8 +295,7 @@ const callGeminiImageModel = async ({ prompt, negativePrompt, apiKey, signal }) 
       errorPayload = null;
     }
 
-    const message =
-      errorPayload?.error?.message || errorPayload?.message || 'Falha ao gerar imagem com a Imagen API.';
+    const message = errorPayload?.error?.message || errorPayload?.message || 'Falha ao gerar imagem com a Imagen API.';
     const retryAfterSeconds = extractRetryAfterSeconds(response, errorPayload, message);
     throw createImagenApiError(message, response.status, errorPayload, retryAfterSeconds);
   }
@@ -347,6 +396,7 @@ const shouldRetryWithFallbackModel = (error) => {
     message.includes('deprecated') ||
     message.includes('not found') ||
     message.includes('imagen-3.0') ||
+    message.includes('nano-banana') ||
     message.includes('gemini-2.5') ||
     message.includes('flash-image')
   );
@@ -408,7 +458,7 @@ const callImagenApiDirectly = async ({ prompt, negativePrompt, apiKey, signal })
   let primaryError = null;
 
   try {
-    return await callGeminiImageModel({ prompt, negativePrompt, apiKey, signal });
+    return await callImagenNanoModel({ prompt, negativePrompt, apiKey, signal });
   } catch (error) {
     primaryError = error;
     if (!shouldRetryWithFallbackModel(error)) {
@@ -417,13 +467,7 @@ const callImagenApiDirectly = async ({ prompt, negativePrompt, apiKey, signal })
   }
 
   try {
-    return await callLegacyImagenEndpoint({
-      endpoint: LEGACY_GENERATE_ENDPOINT,
-      prompt,
-      negativePrompt,
-      apiKey,
-      signal
-    });
+    return await callGeminiFlashImageModel({ prompt, negativePrompt, apiKey, signal });
   } catch (legacyError) {
     if (!shouldRetryWithFallbackModel(legacyError)) {
       legacyError.cause = primaryError || legacyError.cause;
@@ -432,15 +476,30 @@ const callImagenApiDirectly = async ({ prompt, negativePrompt, apiKey, signal })
 
     try {
       return await callLegacyImagenEndpoint({
-        endpoint: LEGACY_FALLBACK_GENERATE_ENDPOINT,
+        endpoint: LEGACY_GENERATE_ENDPOINT,
         prompt,
         negativePrompt,
         apiKey,
         signal
       });
     } catch (fallbackError) {
-      fallbackError.cause = primaryError || legacyError;
-      throw fallbackError;
+      if (!shouldRetryWithFallbackModel(fallbackError)) {
+        fallbackError.cause = primaryError || legacyError;
+        throw fallbackError;
+      }
+
+      try {
+        return await callLegacyImagenEndpoint({
+          endpoint: LEGACY_FALLBACK_GENERATE_ENDPOINT,
+          prompt,
+          negativePrompt,
+          apiKey,
+          signal
+        });
+      } catch (finalError) {
+        finalError.cause = primaryError || fallbackError;
+        throw finalError;
+      }
     }
   }
 };
