@@ -26,24 +26,44 @@ const normalizeJsonText = (text) =>
   text
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\u200b-\u200d]/g, '')
+    .replace(/\r\n/g, '\n')
     .trim();
 
-const extractJsonPayload = (content) => {
-  if (typeof content !== 'string') return '';
+const tryParseJson = (candidate) => {
+  const normalized = normalizeJsonText(candidate);
+  if (!normalized) return null;
 
-  const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (codeBlockMatch) {
-    return normalizeJsonText(codeBlockMatch[1]);
+  try {
+    return JSON.parse(normalized);
+  } catch (error) {
+    return null;
+  }
+};
+
+const extractJsonPayload = (content) => {
+  if (typeof content !== 'string') return null;
+
+  const codeBlocks = [...content.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  for (const [, blockContent] of codeBlocks) {
+    const parsed = tryParseJson(blockContent);
+    if (parsed) {
+      return parsed;
+    }
   }
 
   const firstBrace = content.indexOf('{');
   const lastBrace = content.lastIndexOf('}');
 
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    return normalizeJsonText(content.slice(firstBrace, lastBrace + 1));
+    const parsed = tryParseJson(content.slice(firstBrace, lastBrace + 1));
+    if (parsed) {
+      return parsed;
+    }
   }
 
-  return normalizeJsonText(content);
+  return tryParseJson(content);
 };
 
 export async function generateCarouselContent({ theme, brandKit, apiKey, signal }) {
@@ -97,13 +117,13 @@ export async function generateCarouselContent({ theme, brandKit, apiKey, signal 
   }
 
   try {
-    const jsonPayload = extractJsonPayload(rawContent);
+    const parsedResponse = extractJsonPayload(rawContent);
 
-    if (!jsonPayload) {
+    if (!parsedResponse) {
       throw new Error('Empty content');
     }
 
-    return JSON.parse(jsonPayload);
+    return parsedResponse;
   } catch (error) {
     console.error('[claudeService] Failed to parse JSON response', error, rawContent);
     throw new Error('Não foi possível interpretar a resposta da Claude API.');
