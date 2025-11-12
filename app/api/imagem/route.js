@@ -12,24 +12,131 @@ const LEGACY_GENERATE_ENDPOINT =
 const LEGACY_FALLBACK_GENERATE_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-ultra-generate-001:predict';
 
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:3000';
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-  'Access-Control-Allow-Methods': 'POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type,X-Goog-Api-Key'
+const DEFAULT_ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'https://instagram-carousel-generator-git-main-pedro-licios-projects.vercel.app'
+];
+
+const makeRequestId = () => {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch (error) {
+    // Ignored – falls back to timestamp-based id below.
+  }
+
+  return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 };
 
-const PROMPT_EXEMPLO =
-  'Ilustração minimalista 1080x1080 de uma banana geométrica centralizada, fundo azul-claro #A3D9FF, sombras suaves, sem pessoas, estilo clean de identidade visual.';
+const logWithContext = (level, requestId, message, meta) => {
+  const prefix = requestId ? `[Imagen][${requestId}]` : '[Imagen]';
+  const logger = typeof console[level] === 'function' ? console[level] : console.log;
+  if (meta !== undefined) {
+    logger(`${prefix} ${message}`, meta);
+  } else {
+    logger(`${prefix} ${message}`);
+  }
+};
 
-const ensureCors = (response) => {
-  Object.entries(CORS_HEADERS).forEach(([key, value]) => {
-    response.headers.set(key, value);
-  });
+const logInfo = (requestId, message, meta) => logWithContext('info', requestId, message, meta);
+const logWarn = (requestId, message, meta) => logWithContext('warn', requestId, message, meta);
+const logError = (requestId, message, meta) => logWithContext('error', requestId, message, meta);
+
+const formatErrorForLog = (error) => {
+  if (!error || typeof error !== 'object') {
+    return { message: String(error) };
+  }
+
+  const formatted = {
+    name: error.name || 'Error',
+    message: error.message || null,
+    status: error.status ?? null,
+    code: error.code || error?.payload?.error?.code || null
+  };
+
+  if (error?.payload?.error?.status) {
+    formatted.remoteStatus = error.payload.error.status;
+  }
+
+  if (error?.payload?.error?.message) {
+    formatted.remoteMessage = error.payload.error.message;
+  }
+
+  if (error?.details) {
+    if (typeof error.details === 'string') {
+      formatted.details = truncateForLog(error.details, 800);
+    } else if (typeof error.details === 'object') {
+      formatted.detailKeys = Object.keys(error.details);
+    }
+  }
+
+  return formatted;
+};
+
+const truncateForLog = (value, maxLength = 500) => {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength)}…`;
+};
+
+const parseAllowedOrigins = () => {
+  const raw = process.env.ALLOWED_ORIGINS || process.env.ALLOWED_ORIGIN || '';
+  const entries = raw
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  if (entries.length === 0) {
+    return ['*', ...DEFAULT_ALLOWED_ORIGINS];
+  }
+
+  return Array.from(new Set([...entries, ...DEFAULT_ALLOWED_ORIGINS]));
+};
+
+const ALLOWED_ORIGINS = parseAllowedOrigins();
+
+const resolveAllowedOrigin = (requestOrigin) => {
+  if (!requestOrigin) {
+    return ALLOWED_ORIGINS.includes('*') ? '*' : ALLOWED_ORIGINS[0];
+  }
+
+  if (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(requestOrigin)) {
+    return requestOrigin;
+  }
+
+  return ALLOWED_ORIGINS[0];
+};
+
+const ensureCors = (response, request) => {
+  const origin = request?.headers?.get?.('origin');
+  const allowedOrigin = resolveAllowedOrigin(origin);
+
+  response.headers.set('Access-Control-Allow-Origin', allowedOrigin || '*');
+  response.headers.set('Access-Control-Allow-Methods', 'POST,OPTIONS');
+
+  const requestHeaders = request?.headers?.get?.('access-control-request-headers');
+  const allowedHeaders = requestHeaders || 'Content-Type,X-Goog-Api-Key';
+  response.headers.set('Access-Control-Allow-Headers', allowedHeaders);
+
+  if (allowedOrigin !== '*') {
+    response.headers.set('Vary', 'Origin');
+  }
+
   return response;
 };
 
-const jsonResponse = (data, init) => ensureCors(NextResponse.json(data, init));
+const jsonResponse = (data, init, request) => ensureCors(NextResponse.json(data, init), request);
+
+const PROMPT_EXEMPLO =
+  'Ilustração minimalista 1080x1080 de uma banana geométrica centralizada, fundo azul-claro #A3D9FF, sombras suaves, sem pessoas, estilo clean de identidade visual.';
 
 const collectCandidateContentParts = (payload) => {
   const parts = [];
@@ -279,7 +386,14 @@ const isQuotaError = (error) => {
   return payloadMessage.includes('quota') || payloadMessage.includes('rate limit');
 };
 
-const callApi = async (url, payload, apiKey) => {
+const callApi = async (url, payload, apiKey, context = {}) => {
+  const { requestId, step } = context;
+  logInfo(requestId, `Enviando requisição ${step || ''}`.trim(), {
+    url,
+    hasPayload: Boolean(payload),
+    payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload) : []
+  });
+
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -301,13 +415,25 @@ const callApi = async (url, payload, apiKey) => {
     const apiError = new Error(message);
     apiError.status = response.status;
     apiError.payload = data;
+    logError(requestId, `Resposta não-ok da API em ${step || url}`, {
+      status: response.status,
+      statusText: response.statusText,
+      body: data?.error || data,
+      message
+    });
     throw apiError;
   }
+
+  logInfo(requestId, `Resposta bem-sucedida em ${step || url}`, {
+    status: response.status,
+    hasData: Boolean(data),
+    dataKeys: data && typeof data === 'object' ? Object.keys(data) : []
+  });
 
   return data;
 };
 
-const callGeminiModel = async ({ prompt, negativePrompt, apiKey }) => {
+const callGeminiModel = async ({ prompt, negativePrompt, apiKey, requestId }) => {
   const url = new URL(GEMINI_IMAGE_ENDPOINT);
   url.searchParams.set('key', apiKey);
 
@@ -322,12 +448,14 @@ const callGeminiModel = async ({ prompt, negativePrompt, apiKey }) => {
     ]
   };
 
-  const result = await callApi(url.toString(), payload, apiKey);
-  console.log('[Imagen] Resposta gemini-2.5-flash-image:', JSON.stringify(result));
+  const result = await callApi(url.toString(), payload, apiKey, {
+    requestId,
+    step: GEMINI_MODEL_NAME
+  });
   return result;
 };
 
-const callLegacyImagenApi = async ({ prompt, negativePrompt, apiKey }) => {
+const callLegacyImagenApi = async ({ prompt, negativePrompt, apiKey, requestId }) => {
   const url = new URL(LEGACY_GENERATE_ENDPOINT);
   url.searchParams.set('key', apiKey);
 
@@ -354,12 +482,14 @@ const callLegacyImagenApi = async ({ prompt, negativePrompt, apiKey }) => {
     }
   };
 
-  const result = await callApi(url.toString(), payload, apiKey);
-  console.log('[Imagen] Resposta imagen-4.0-generate-001:', JSON.stringify(result));
+  const result = await callApi(url.toString(), payload, apiKey, {
+    requestId,
+    step: IMAGEN_40_MODEL_NAME
+  });
   return result;
 };
 
-const callLegacyFallbackImagenApi = async ({ prompt, negativePrompt, apiKey }) => {
+const callLegacyFallbackImagenApi = async ({ prompt, negativePrompt, apiKey, requestId }) => {
   const url = new URL(LEGACY_FALLBACK_GENERATE_ENDPOINT);
   url.searchParams.set('key', apiKey);
 
@@ -386,8 +516,10 @@ const callLegacyFallbackImagenApi = async ({ prompt, negativePrompt, apiKey }) =
     }
   };
 
-  const result = await callApi(url.toString(), payload, apiKey);
-  console.log('[Imagen] Resposta imagen-4.0-ultra-generate-001:', JSON.stringify(result));
+  const result = await callApi(url.toString(), payload, apiKey, {
+    requestId,
+    step: IMAGEN_40_ULTRA_MODEL_NAME
+  });
   return result;
 };
 
@@ -452,20 +584,23 @@ const resolveBase64Image = async (payload, apiKey) => {
   return base64;
 };
 
-const generateImage = async ({ prompt, negativePrompt, apiKey }) => {
+const generateImage = async ({ prompt, negativePrompt, apiKey, requestId }) => {
   try {
-    const gemini = await callGeminiModel({ prompt, negativePrompt, apiKey });
+    logInfo(requestId, `Iniciando tentativa com ${GEMINI_MODEL_NAME}.`);
+    const gemini = await callGeminiModel({ prompt, negativePrompt, apiKey, requestId });
 
     const safetyDetail = detectSafetyBlock(gemini);
     if (safetyDetail) {
       const safetyError = new Error('Bloqueado por segurança');
       safetyError.status = 422;
       safetyError.details = safetyDetail;
+      logWarn(requestId, `${GEMINI_MODEL_NAME} bloqueou por segurança.`, { detail: safetyDetail });
       throw safetyError;
     }
 
     const base64 = await resolveBase64Image(gemini, apiKey);
     if (base64) {
+      logInfo(requestId, `${GEMINI_MODEL_NAME} retornou imagem com sucesso.`);
       return base64;
     }
 
@@ -474,28 +609,39 @@ const generateImage = async ({ prompt, negativePrompt, apiKey }) => {
     );
     noImageError.status = 502;
     noImageError.details = gemini;
+    logWarn(requestId, `${GEMINI_MODEL_NAME} respondeu sem imagem.`, {
+      dataKeys: gemini && typeof gemini === 'object' ? Object.keys(gemini) : []
+    });
     throw noImageError;
   } catch (error) {
     const isFallbackCandidate =
       !error?.status || error.status >= 500 || error.status === 404 || error.status === 405;
 
     if (!isFallbackCandidate && error.status !== 422) {
+      logError(requestId, `Falha irrecuperável em ${GEMINI_MODEL_NAME}.`, formatErrorForLog(error));
       throw error;
     }
 
     try {
-      const legacy = await callLegacyImagenApi({ prompt, negativePrompt, apiKey });
+      logWarn(
+        requestId,
+        `${GEMINI_MODEL_NAME} falhou (fallbackCandidate=${isFallbackCandidate}). Tentando ${IMAGEN_40_MODEL_NAME}.`,
+        formatErrorForLog(error)
+      );
+      const legacy = await callLegacyImagenApi({ prompt, negativePrompt, apiKey, requestId });
 
       const safetyDetail = detectSafetyBlock(legacy);
       if (safetyDetail) {
         const safetyError = new Error('Bloqueado por segurança');
         safetyError.status = 422;
         safetyError.details = safetyDetail;
+        logWarn(requestId, `${IMAGEN_40_MODEL_NAME} bloqueou por segurança.`, { detail: safetyDetail });
         throw safetyError;
       }
 
       const base64 = await resolveBase64Image(legacy, apiKey);
       if (base64) {
+        logInfo(requestId, `${IMAGEN_40_MODEL_NAME} retornou imagem com sucesso.`);
         return base64;
       }
 
@@ -504,27 +650,43 @@ const generateImage = async ({ prompt, negativePrompt, apiKey }) => {
       );
       legacyError.status = 502;
       legacyError.details = legacy;
+      logWarn(requestId, `${IMAGEN_40_MODEL_NAME} respondeu sem imagem.`, {
+        dataKeys: legacy && typeof legacy === 'object' ? Object.keys(legacy) : []
+      });
       throw legacyError;
     } catch (fallbackError) {
       if (!isFallbackCandidate && fallbackError?.status && fallbackError.status < 500 && fallbackError.status !== 422) {
+        logError(requestId, `Falha irrecuperável em ${IMAGEN_40_MODEL_NAME}.`, formatErrorForLog(fallbackError));
         throw fallbackError;
       }
 
       fallbackError.cause = error;
 
       try {
-        const legacyFallback = await callLegacyFallbackImagenApi({ prompt, negativePrompt, apiKey });
+        logWarn(
+          requestId,
+          `${IMAGEN_40_MODEL_NAME} falhou (fallbackCandidate=${isFallbackCandidate}). Tentando ${IMAGEN_40_ULTRA_MODEL_NAME}.`,
+          formatErrorForLog(fallbackError)
+        );
+        const legacyFallback = await callLegacyFallbackImagenApi({
+          prompt,
+          negativePrompt,
+          apiKey,
+          requestId
+        });
 
         const safetyDetail = detectSafetyBlock(legacyFallback);
         if (safetyDetail) {
           const safetyError = new Error('Bloqueado por segurança');
           safetyError.status = 422;
           safetyError.details = safetyDetail;
+          logWarn(requestId, `${IMAGEN_40_ULTRA_MODEL_NAME} bloqueou por segurança.`, { detail: safetyDetail });
           throw safetyError;
         }
 
         const base64 = await resolveBase64Image(legacyFallback, apiKey);
         if (base64) {
+          logInfo(requestId, `${IMAGEN_40_ULTRA_MODEL_NAME} retornou imagem com sucesso.`);
           return base64;
         }
 
@@ -534,8 +696,15 @@ const generateImage = async ({ prompt, negativePrompt, apiKey }) => {
         legacyError.status = 502;
         legacyError.details = legacyFallback;
         legacyError.cause = fallbackError;
+        logWarn(requestId, `${IMAGEN_40_ULTRA_MODEL_NAME} respondeu sem imagem.`, {
+          dataKeys: legacyFallback && typeof legacyFallback === 'object' ? Object.keys(legacyFallback) : []
+        });
         throw legacyError;
       } catch (legacyError) {
+        logError(requestId, `${IMAGEN_40_ULTRA_MODEL_NAME} também falhou.`, {
+          primary: formatErrorForLog(legacyError),
+          secondary: formatErrorForLog(fallbackError)
+        });
         legacyError.cause = legacyError.cause ?? fallbackError;
         throw legacyError;
       }
@@ -543,16 +712,21 @@ const generateImage = async ({ prompt, negativePrompt, apiKey }) => {
   }
 };
 
-export async function OPTIONS() {
-  return jsonResponse(null, { status: 204 });
+export async function OPTIONS(request) {
+  return ensureCors(new NextResponse(null, { status: 204 }), request);
 }
 
 export async function POST(request) {
+  const requestId = makeRequestId();
+  const origin = request?.headers?.get?.('origin') || null;
+  logInfo(requestId, 'Requisição recebida para geração de imagem.', { origin });
+
   let body;
   try {
     body = await request.json();
   } catch (error) {
-    return jsonResponse({ error: 'Corpo da requisição inválido.' }, { status: 400 });
+    logError(requestId, 'Falha ao interpretar JSON da requisição.', formatErrorForLog(error));
+    return jsonResponse({ error: 'Corpo da requisição inválido.' }, { status: 400 }, request);
   }
 
   const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';
@@ -561,33 +735,39 @@ export async function POST(request) {
   const apiKey = providedKey || (process.env.GOOGLE_API_KEY || '').trim();
 
   if (!apiKey) {
-    return jsonResponse({ error: 'A API Key é obrigatória.' }, { status: 401 });
+    logWarn(requestId, 'Requisição sem API key.');
+    return jsonResponse({ error: 'A API Key é obrigatória.' }, { status: 401 }, request);
   }
 
   if (!prompt) {
-    return jsonResponse({ error: 'O prompt é obrigatório.', exemplo: PROMPT_EXEMPLO }, { status: 400 });
+    logWarn(requestId, 'Prompt ausente na requisição.');
+    return jsonResponse({ error: 'O prompt é obrigatório.', exemplo: PROMPT_EXEMPLO }, { status: 400 }, request);
   }
 
-  console.log('[Imagen] Prompt recebido:', prompt);
+  logInfo(requestId, 'Prompt recebido.', {
+    prompt: truncateForLog(prompt),
+    negativePrompt: negativePrompt ? truncateForLog(negativePrompt) : undefined,
+    negativePromptLength: negativePrompt.length
+  });
 
   try {
-    const image = await generateImage({ prompt, negativePrompt, apiKey });
-    return jsonResponse({ image });
+    const image = await generateImage({ prompt, negativePrompt, apiKey, requestId });
+    logInfo(requestId, 'Imagem gerada com sucesso.');
+    return jsonResponse({ image }, undefined, request);
   } catch (error) {
-    if (error?.details) {
-      console.log('[Imagen] Erro detalhado:', JSON.stringify(error.details));
-    }
+    const formattedError = formatErrorForLog(error);
+    logError(requestId, 'Falha ao gerar imagem.', formattedError);
 
     if (error?.status === 422 && error.message.includes('Bloqueado')) {
-      return jsonResponse({ error: 'Bloqueado por segurança', detalhes: error.details || null }, { status: 422 });
+      return jsonResponse({ error: 'Bloqueado por segurança', detalhes: error.details || null }, { status: 422 }, request);
     }
 
     if (isQuotaError(error)) {
-      return jsonResponse({ error: 'Quota excedida', detalhes: error.message }, { status: error.status || 429 });
+      return jsonResponse({ error: 'Quota excedida', detalhes: error.message }, { status: error.status || 429 }, request);
     }
 
     const status = error?.status && Number.isInteger(error.status) ? error.status : 500;
     const message = error?.message || 'Falha ao gerar imagem.';
-    return jsonResponse({ error: message, exemplo: PROMPT_EXEMPLO }, { status });
+    return jsonResponse({ error: message, exemplo: PROMPT_EXEMPLO }, { status }, request);
   }
 }
