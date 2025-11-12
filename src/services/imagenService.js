@@ -1,4 +1,10 @@
 import { buildImagenPrompt, buildNegativePrompt } from '../utils/promptBuilder.js';
+import {
+  IMAGEN_DEFAULT_ASPECT_RATIO,
+  IMAGEN_DEFAULT_PERSON_GENERATION,
+  IMAGEN_DEFAULT_SAMPLE_COUNT,
+  IMAGEN_DEFAULT_SAFETY_FILTER_LEVEL
+} from '../config/imagenDefaults.js';
 
 const IMAGEN_PROXY_ENDPOINT = '/api/imagen';
 const IMAGEN_DEFAULT_MODEL = 'imagen-4.0-generate-001';
@@ -15,10 +21,10 @@ const LEGACY_FALLBACK_GENERATE_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/imagegeneration@002:generate';
 
 const IMAGEN_CONFIG = {
-  aspectRatio: '4:5',
-  numberOfImages: 1,
-  safetyFilterLevel: 'block_some',
-  personGeneration: 'allow_adult'
+  aspectRatio: IMAGEN_DEFAULT_ASPECT_RATIO,
+  numberOfImages: IMAGEN_DEFAULT_SAMPLE_COUNT,
+  safetyFilterLevel: IMAGEN_DEFAULT_SAFETY_FILTER_LEVEL,
+  personGeneration: IMAGEN_DEFAULT_PERSON_GENERATION
 };
 const MISSING_IMAGE_ERROR_PATTERNS = [
   'não contém uma imagem válida',
