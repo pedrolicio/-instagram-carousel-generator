@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { BrainCircuit, GalleryHorizontal, History, Settings, Users } from 'lucide-react';
-import { ClientManager } from './components/ClientManager.jsx';
-import { CarouselGenerator } from './components/CarouselGenerator.jsx';
-import { HistoryView } from './components/HistoryView.jsx';
-import { ApiKeySettings } from './components/ApiKeySettings.jsx';
-import { useAppContext } from './context/AppContext.jsx';
+import { ClientManager } from './features/clients/components/ClientManager.jsx';
+import { CarouselGenerator } from './features/carousels/components/CarouselGenerator.jsx';
+import { HistoryView } from './features/history/components/HistoryView.jsx';
+import { ApiKeySettings } from './features/api-keys/components/ApiKeySettings.jsx';
+import { useClients } from './app/providers/ClientsProvider.jsx';
 
 const TABS = {
   clients: {
@@ -46,7 +46,7 @@ const TabButton = ({ tab, isActive, onClick }) => {
 };
 
 export default function App() {
-  const { clients } = useAppContext();
+  const { clients } = useClients();
   const [activeTab, setActiveTab] = useState(TABS.clients.id);
   const [selectedClientId, setSelectedClientId] = useState(null);
 

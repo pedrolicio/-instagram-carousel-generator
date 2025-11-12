@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Download, Recycle, Trash2 } from 'lucide-react';
-import { useAppContext } from '../context/AppContext.jsx';
+import { useClients } from '../../../app/providers/ClientsProvider.jsx';
+import { useCarousels } from '../../../app/providers/CarouselsProvider.jsx';
 
 const formatDateTime = (iso) =>
   new Date(iso).toLocaleString('pt-BR', {
@@ -12,7 +13,8 @@ const formatDateTime = (iso) =>
   });
 
 export const HistoryView = ({ onSelectClient, onOpenGenerator }) => {
-  const { carousels, clients, removeCarousel, carouselStorageError } = useAppContext();
+  const { clients } = useClients();
+  const { carousels, removeCarousel, storageError } = useCarousels();
   const [clientFilter, setClientFilter] = useState('all');
   const [query, setQuery] = useState('');
 
@@ -76,8 +78,8 @@ export const HistoryView = ({ onSelectClient, onOpenGenerator }) => {
         </div>
       </header>
 
-      {carouselStorageError && (
-        <div className="rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">{carouselStorageError}</div>
+      {storageError && (
+        <div className="rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">{storageError}</div>
       )}
 
       <div className="grid gap-4">

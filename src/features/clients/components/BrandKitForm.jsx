@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { FileText, Images, Sparkles, UserCircle2, XCircle } from 'lucide-react';
-import { validateBrandKit } from '../utils/brandKitValidator.js';
-import { languageOptions, toneOptions } from '../utils/brandKitOptions.js';
+import { validateBrandKit } from '../../../utils/brandKitValidator.js';
+import { languageOptions, toneOptions } from '../../../utils/brandKitOptions.js';
 
 const Section = ({ icon: Icon, title, description, children }) => (
   <section className="rounded-2xl border border-primary/10 bg-surface p-6 shadow-sm">

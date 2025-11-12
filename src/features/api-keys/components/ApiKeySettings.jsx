@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Eye, EyeOff, FlaskConical, KeyRound, Lock, ShieldCheck, Trash2, Unlock } from 'lucide-react';
-import { useAppContext } from '../context/AppContext.jsx';
+import { useApiKeys } from '../../../app/providers/ApiKeysProvider.jsx';
+import { useSettings } from '../../../app/providers/SettingsProvider.jsx';
+import { useSystem } from '../../../app/providers/SystemProvider.jsx';
 
 const inputBase =
   'rounded-xl border border-primary/20 bg-background px-4 py-2 text-sm text-text outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20';
@@ -15,11 +17,10 @@ export const ApiKeySettings = () => {
     rememberSecret,
     persistApiKeys,
     unlockApiKeys,
-    lockApiKeys,
-    clearAllData,
-    settings,
-    updateSettings
-  } = useAppContext();
+    lockApiKeys
+  } = useApiKeys();
+  const { settings, updateSettings } = useSettings();
+  const { clearAllData } = useSystem();
 
   const [localKeys, setLocalKeys] = useState(apiKeys);
   const [secret, setSecret] = useState(encryptionSecret);

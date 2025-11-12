@@ -1,12 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { Loader2, Sparkles, Wand2 } from 'lucide-react';
-import { useAppContext, CAROUSEL_STORAGE_ERROR_MESSAGE } from '../context/AppContext.jsx';
-import { generateCarouselContent } from '../services/claudeService.js';
+import { useClients } from '../../../app/providers/ClientsProvider.jsx';
+import { useCarousels, CAROUSEL_STORAGE_ERROR_MESSAGE } from '../../../app/providers/CarouselsProvider.jsx';
+import { useApiKeys } from '../../../app/providers/ApiKeysProvider.jsx';
+import { useSettings } from '../../../app/providers/SettingsProvider.jsx';
+import { generateCarouselContent } from '../../../services/claudeService.js';
 import { ContentPreview } from './ContentPreview.jsx';
 import { ImageGenerator } from './ImageGenerator.jsx';
 import { GeneratedImagesPreview } from './GeneratedImagesPreview.jsx';
 import { v4 as uuidv4 } from 'uuid';
-import { buildImagenPrompt, buildNegativePrompt } from '../utils/promptBuilder.js';
+import { buildImagenPrompt, buildNegativePrompt } from '../../../utils/promptBuilder.js';
 
 const inputBase = 'w-full rounded-xl border border-primary/20 bg-background px-4 py-3 text-sm text-text outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20';
 
@@ -37,7 +40,10 @@ const createMockCarousel = (theme, brandKit) => {
 };
 
 export const CarouselGenerator = ({ selectedClientId, onSelectClient }) => {
-  const { clients, addCarousel, apiKeys, settings } = useAppContext();
+  const { clients } = useClients();
+  const { addCarousel } = useCarousels();
+  const { apiKeys } = useApiKeys();
+  const { settings } = useSettings();
   const [theme, setTheme] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState('');

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ImageDown, Loader2 } from 'lucide-react';
-import { generateCarouselImages } from '../services/imagenService.js';
-import { buildImagenPrompt, buildNegativePrompt } from '../utils/promptBuilder.js';
+import { generateCarouselImages } from '../../../services/imagenService.js';
+import { buildImagenPrompt, buildNegativePrompt } from '../../../utils/promptBuilder.js';
 
 export const ImageGenerator = ({ slides, brandKit, apiKey, onImagesGenerated }) => {
   const [isGenerating, setIsGenerating] = useState(false);

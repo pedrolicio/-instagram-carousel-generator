@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { Plus, Settings2, Trash2, UserCircle2 } from 'lucide-react';
-import { useAppContext } from '../context/AppContext.jsx';
 import { BrandKitForm } from './BrandKitForm.jsx';
 import { v4 as uuidv4 } from 'uuid';
-import { languageOptions, toneOptions } from '../utils/brandKitOptions.js';
+import { useClients } from '../../../app/providers/ClientsProvider.jsx';
+import { languageOptions, toneOptions } from '../../../utils/brandKitOptions.js';
 
 const formatDate = (isoDate) => {
   if (!isoDate) return '-';
@@ -107,7 +107,7 @@ const ClientCard = ({ client, onEdit, onDelete, onGenerate }) => {
 };
 
 export const ClientManager = ({ onSelectClient }) => {
-  const { clients, addClient, updateClient, removeClient } = useAppContext();
+  const { clients, addClient, updateClient, removeClient } = useClients();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
 
