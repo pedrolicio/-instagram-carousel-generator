@@ -1,4 +1,10 @@
 import { NextResponse } from 'next/server';
+import {
+  IMAGEN_DEFAULT_ASPECT_RATIO,
+  IMAGEN_DEFAULT_PERSON_GENERATION,
+  IMAGEN_DEFAULT_SAMPLE_COUNT,
+  IMAGEN_DEFAULT_SAFETY_FILTER_LEVEL
+} from '../../../src/config/imagenDefaults.js';
 
 export const runtime = 'edge';
 
@@ -29,11 +35,11 @@ const DEFAULT_ALLOWED_ORIGINS = [
 ];
 
 const IMAGEN_DEFAULT_PARAMETERS = {
-  sampleCount: 1,
-  aspectRatio: '4:5',
+  sampleCount: IMAGEN_DEFAULT_SAMPLE_COUNT,
+  aspectRatio: IMAGEN_DEFAULT_ASPECT_RATIO,
   outputMimeType: 'image/png',
-  safetyFilterLevel: 'block_some',
-  personGeneration: 'allow_adult'
+  safetyFilterLevel: IMAGEN_DEFAULT_SAFETY_FILTER_LEVEL,
+  personGeneration: IMAGEN_DEFAULT_PERSON_GENERATION
 };
 
 const makeRequestId = () => {

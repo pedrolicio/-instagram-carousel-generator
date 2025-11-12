@@ -189,7 +189,7 @@ export const buildImagenPrompt = (slide, brandKit) => {
     .filter(Boolean)
     .join(' ');
 
-  return `${descriptionParts.join('. ')}. Formato 4:5 para carrossel do Instagram. Design limpo, profissional e de alta qualidade. Inclua espaço para texto com ${
+  return `${descriptionParts.join('. ')}. Formato quadrado 1:1 (1080x1080) para carrossel do Instagram. Design limpo, profissional e de alta qualidade. Inclua espaço para texto com ${
     textOverlay || 'mensagens da marca'
   }.`;
 };
