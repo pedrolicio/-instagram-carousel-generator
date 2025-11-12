@@ -209,8 +209,35 @@ const callImagenProxy = async ({ prompt, negativePrompt, apiKey, signal }) => {
   return image;
 };
 
+const appendRemoteMessage = (baseMessage, payload) => {
+  const rawMessage =
+    payload?.error?.message ||
+    payload?.error?.details?.[0]?.message ||
+    payload?.message ||
+    '';
+
+  if (!rawMessage || typeof rawMessage !== 'string') {
+    return baseMessage;
+  }
+
+  if (baseMessage && baseMessage.includes(rawMessage)) {
+    return baseMessage;
+  }
+
+  const sanitized = rawMessage.trim();
+  if (!sanitized) {
+    return baseMessage;
+  }
+
+  const truncated = sanitized.length > 600 ? `${sanitized.slice(0, 600)}…` : sanitized;
+
+  const separator = baseMessage?.trim()?.endsWith('.') ? '' : '.';
+  return `${baseMessage || 'Falha ao gerar imagem com a Imagen API.'}${separator} Detalhes: ${truncated}`;
+};
+
 const createImagenApiError = (message, status, payload, retryAfterSeconds) => {
-  const error = new Error(message || 'Falha ao gerar imagem com a Imagen API.');
+  const enrichedMessage = appendRemoteMessage(message, payload);
+  const error = new Error(enrichedMessage || 'Falha ao gerar imagem com a Imagen API.');
   if (status) error.status = status;
   if (payload) error.payload = payload;
   if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
