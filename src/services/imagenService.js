@@ -1,9 +1,9 @@
 import { buildImagenPrompt, buildNegativePrompt } from '../utils/promptBuilder.js';
 
 const IMAGEN_PROXY_ENDPOINT = '/api/imagen';
-const IMAGEN_NANO_MODEL = 'imagen-3.0-generate-001';
-const IMAGEN_NANO_ENDPOINT =
-  `https://generativelanguage.googleapis.com/v1beta/models/${IMAGEN_NANO_MODEL}:generateContent`;
+const IMAGEN_DEFAULT_MODEL = 'imagen-4.0-generate-001';
+const IMAGEN_DEFAULT_ENDPOINT =
+  `https://generativelanguage.googleapis.com/v1beta/models/${IMAGEN_DEFAULT_MODEL}:generateContent`;
 const GEMINI_IMAGE_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
 const LEGACY_GENERATE_ENDPOINT =
@@ -217,7 +217,7 @@ const createImagenApiError = (message, status, payload, retryAfterSeconds) => {
   return error;
 };
 
-const callImagenNanoModel = async ({ prompt, negativePrompt, apiKey, signal }) => {
+const callImagenDefaultModel = async ({ prompt, negativePrompt, apiKey, signal }) => {
   const payload = {
     contents: [
       {
@@ -227,7 +227,7 @@ const callImagenNanoModel = async ({ prompt, negativePrompt, apiKey, signal }) =
     ]
   };
 
-  const requestUrl = new URL(IMAGEN_NANO_ENDPOINT);
+  const requestUrl = new URL(IMAGEN_DEFAULT_ENDPOINT);
   requestUrl.searchParams.set('key', apiKey);
 
   const response = await fetch(requestUrl, {
@@ -249,7 +249,7 @@ const callImagenNanoModel = async ({ prompt, negativePrompt, apiKey, signal }) =
     }
 
     const message =
-      errorPayload?.error?.message || errorPayload?.message || 'Falha ao gerar imagem com o modelo Imagen 3.0 Nano.';
+      errorPayload?.error?.message || errorPayload?.message || 'Falha ao gerar imagem com o modelo Imagen 4.0.';
     const retryAfterSeconds = extractRetryAfterSeconds(response, errorPayload, message);
     throw createImagenApiError(message, response.status, errorPayload, retryAfterSeconds);
   }
@@ -258,7 +258,7 @@ const callImagenNanoModel = async ({ prompt, negativePrompt, apiKey, signal }) =
   const base64Image = extractBase64Image(result);
 
   if (!base64Image) {
-    throw createImagenApiError('O modelo Imagen 3.0 Nano não retornou uma imagem válida.');
+    throw createImagenApiError('O modelo Imagen 4.0 não retornou uma imagem válida.');
   }
 
   return base64Image;
@@ -395,8 +395,10 @@ const shouldRetryWithFallbackModel = (error) => {
     message.includes('predict') ||
     message.includes('deprecated') ||
     message.includes('not found') ||
+    message.includes('imagen-4.0') ||
     message.includes('imagen-3.0') ||
     message.includes('generate-001') ||
+    message.includes('fast-generate') ||
     message.includes('gemini-2.5') ||
     message.includes('flash-image')
   );
@@ -458,7 +460,7 @@ const callImagenApiDirectly = async ({ prompt, negativePrompt, apiKey, signal })
   let primaryError = null;
 
   try {
-    return await callImagenNanoModel({ prompt, negativePrompt, apiKey, signal });
+    return await callImagenDefaultModel({ prompt, negativePrompt, apiKey, signal });
   } catch (error) {
     primaryError = error;
     if (!shouldRetryWithFallbackModel(error)) {
