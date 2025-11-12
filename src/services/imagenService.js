@@ -17,6 +17,15 @@ const IMAGEN_CONFIG = {
   safetyFilterLevel: 'block_some',
   personGeneration: 'allow_adult'
 };
+const MISSING_IMAGE_ERROR_PATTERNS = [
+  'não contém uma imagem válida',
+  'não contém imagem válida',
+  'não retornou imagem',
+  'missing image',
+  'missing an image_id',
+  'missing image_id',
+  'invalid image'
+];
 const NETWORK_ERROR_MESSAGE =
   'Não foi possível se conectar à Imagen API. Verifique sua conexão com a internet, a chave de API e tente novamente.';
 const QUOTA_ERROR_MESSAGE =
@@ -246,6 +255,30 @@ const createImagenApiError = (message, status, payload, retryAfterSeconds) => {
   return error;
 };
 
+const normalizeErrorMessage = (message) => (typeof message === 'string' ? message.toLowerCase() : '');
+
+const hasMissingImageMessage = (message) => {
+  const normalized = normalizeErrorMessage(message);
+  if (!normalized) return false;
+
+  return MISSING_IMAGE_ERROR_PATTERNS.some((pattern) => normalized.includes(pattern));
+};
+
+const isMissingImageError = (error) => {
+  if (!error) return false;
+
+  if (hasMissingImageMessage(error.message)) {
+    return true;
+  }
+
+  const payloadError = error.payload?.error || error.payload;
+  if (hasMissingImageMessage(payloadError?.message)) {
+    return true;
+  }
+
+  return false;
+};
+
 const callImagenDefaultModel = async ({ prompt, negativePrompt, apiKey, signal }) => {
   const payload = {
     contents: [
@@ -418,6 +451,10 @@ const shouldRetryWithFallbackModel = (error) => {
   if (error.status && error.status >= 500) return true;
 
   const message = (error.payload?.error?.message || error.message || '').toLowerCase();
+
+  if (isMissingImageError(error)) {
+    return true;
+  }
 
   return (
     message.includes('legacy') ||

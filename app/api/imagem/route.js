@@ -12,6 +12,16 @@ const LEGACY_GENERATE_ENDPOINT =
 const LEGACY_FALLBACK_GENERATE_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-ultra-generate-001:predict';
 
+const MISSING_IMAGE_ERROR_PATTERNS = [
+  'não contém uma imagem válida',
+  'não contém imagem válida',
+  'não retornou imagem',
+  'missing image',
+  'missing an image_id',
+  'missing image_id',
+  'invalid image'
+];
+
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3000',
   'http://localhost:5173',
@@ -85,6 +95,38 @@ const truncateForLog = (value, maxLength = 500) => {
   }
 
   return `${value.slice(0, maxLength)}…`;
+};
+
+const normalizeErrorMessage = (message) => (typeof message === 'string' ? message.toLowerCase() : '');
+
+const hasMissingImageMessage = (message) => {
+  const normalized = normalizeErrorMessage(message);
+  if (!normalized) {
+    return false;
+  }
+
+  return MISSING_IMAGE_ERROR_PATTERNS.some((pattern) => normalized.includes(pattern));
+};
+
+const isMissingImageError = (error) => {
+  if (!error) {
+    return false;
+  }
+
+  if (hasMissingImageMessage(error.message)) {
+    return true;
+  }
+
+  const payloadError = error.payload?.error || error.payload;
+  if (hasMissingImageMessage(payloadError?.message)) {
+    return true;
+  }
+
+  if (typeof error.details === 'string' && hasMissingImageMessage(error.details)) {
+    return true;
+  }
+
+  return false;
 };
 
 const parseAllowedOrigins = () => {
@@ -614,10 +656,14 @@ const generateImage = async ({ prompt, negativePrompt, apiKey, requestId }) => {
     });
     throw noImageError;
   } catch (error) {
-    const isFallbackCandidate =
-      !error?.status || error.status >= 500 || error.status === 404 || error.status === 405;
+    const shouldTryLegacy =
+      isMissingImageError(error) ||
+      !error?.status ||
+      error.status >= 500 ||
+      error.status === 404 ||
+      error.status === 405;
 
-    if (!isFallbackCandidate && error.status !== 422) {
+    if (!shouldTryLegacy && error.status !== 422) {
       logError(requestId, `Falha irrecuperável em ${GEMINI_MODEL_NAME}.`, formatErrorForLog(error));
       throw error;
     }
@@ -625,7 +671,7 @@ const generateImage = async ({ prompt, negativePrompt, apiKey, requestId }) => {
     try {
       logWarn(
         requestId,
-        `${GEMINI_MODEL_NAME} falhou (fallbackCandidate=${isFallbackCandidate}). Tentando ${IMAGEN_40_MODEL_NAME}.`,
+        `${GEMINI_MODEL_NAME} falhou (fallbackCandidate=${shouldTryLegacy}). Tentando ${IMAGEN_40_MODEL_NAME}.`,
         formatErrorForLog(error)
       );
       const legacy = await callLegacyImagenApi({ prompt, negativePrompt, apiKey, requestId });
@@ -655,7 +701,14 @@ const generateImage = async ({ prompt, negativePrompt, apiKey, requestId }) => {
       });
       throw legacyError;
     } catch (fallbackError) {
-      if (!isFallbackCandidate && fallbackError?.status && fallbackError.status < 500 && fallbackError.status !== 422) {
+      const shouldTryUltra =
+        isMissingImageError(fallbackError) ||
+        !fallbackError?.status ||
+        fallbackError.status >= 500 ||
+        fallbackError.status === 404 ||
+        fallbackError.status === 405;
+
+      if (!shouldTryUltra && fallbackError?.status && fallbackError.status < 500 && fallbackError.status !== 422) {
         logError(requestId, `Falha irrecuperável em ${IMAGEN_40_MODEL_NAME}.`, formatErrorForLog(fallbackError));
         throw fallbackError;
       }
@@ -665,7 +718,7 @@ const generateImage = async ({ prompt, negativePrompt, apiKey, requestId }) => {
       try {
         logWarn(
           requestId,
-          `${IMAGEN_40_MODEL_NAME} falhou (fallbackCandidate=${isFallbackCandidate}). Tentando ${IMAGEN_40_ULTRA_MODEL_NAME}.`,
+          `${IMAGEN_40_MODEL_NAME} falhou (fallbackCandidate=${shouldTryUltra}). Tentando ${IMAGEN_40_ULTRA_MODEL_NAME}.`,
           formatErrorForLog(fallbackError)
         );
         const legacyFallback = await callLegacyFallbackImagenApi({
