@@ -3,6 +3,24 @@ import { Download, Recycle, Trash2 } from 'lucide-react';
 import { useClients } from '../../../app/providers/ClientsProvider.jsx';
 import { useCarousels } from '../../../app/providers/CarouselsProvider.jsx';
 
+const sanitizeFileSegment = (value) => {
+  if (!value) {
+    return 'carrossel';
+  }
+
+  const normalized = value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  const sanitized = normalized
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return sanitized || 'carrossel';
+};
+
 const formatDateTime = (iso) =>
   new Date(iso).toLocaleString('pt-BR', {
     day: '2-digit',
@@ -41,7 +59,7 @@ export const HistoryView = ({ onSelectClient, onOpenGenerator }) => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${carousel.theme.replace(/\s+/g, '-').toLowerCase()}-carrossel.json`;
+    link.download = `${sanitizeFileSegment(carousel.theme)}-carrossel.json`;
     document.body.appendChild(link);
     link.click();
     link.remove();

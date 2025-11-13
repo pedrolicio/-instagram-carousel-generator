@@ -103,6 +103,7 @@ export const ApiKeysProvider = ({ children }) => {
     setEncryptionSecret('');
     setApiKeysUnlocked(false);
     setRememberSecret(false);
+    clearRememberedEncryptionSecret();
   }, []);
 
   const resetApiKeys = useCallback(() => {
